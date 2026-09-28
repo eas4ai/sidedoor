@@ -2,7 +2,7 @@
 
 use crate::geometry::Edge;
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::PathBuf};
+use std::{collections::BTreeMap, fs, io, path::PathBuf};
 
 /// Sidekick caps the dock at twelve apps, links and widgets.
 pub const MAX_ITEMS: usize = 12;
@@ -16,6 +16,11 @@ pub struct Config {
     pub appearance: Appearance,
     #[serde(default)]
     pub weather: WeatherLocation,
+    /// Global shortcuts by item id ("app:com.apple.Safari", "clipboard", …),
+    /// written like "ctrl-cmd-v". Missing means the defaults; an empty map
+    /// means none.
+    #[serde(default = "default_shortcuts")]
+    pub shortcuts: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -54,6 +59,11 @@ impl Default for WeatherLocation {
     }
 }
 
+/// Clipboard History from anywhere; ⌃⌘V is rarely taken.
+fn default_shortcuts() -> BTreeMap<String, String> {
+    BTreeMap::from([("clipboard".into(), "ctrl-cmd-v".into())])
+}
+
 /// Apps offered in a fresh dock, in order; only installed ones are kept.
 const DEFAULT_APPS: &[&str] = &[
     "com.apple.finder",
@@ -87,6 +97,7 @@ impl Config {
             edge: Edge::default(),
             appearance: Appearance::default(),
             weather: WeatherLocation::default(),
+            shortcuts: default_shortcuts(),
         }
     }
 
@@ -156,6 +167,9 @@ mod tests {
         assert_eq!(config.edge, Edge::Right);
         assert_eq!(config.appearance, Appearance::System);
         assert_eq!(config.weather, WeatherLocation::default());
+        assert_eq!(config.shortcuts, default_shortcuts());
+        let none: Config = serde_json::from_str(r#"{"items":[],"shortcuts":{}}"#).unwrap();
+        assert!(none.shortcuts.is_empty());
     }
 
     #[test]

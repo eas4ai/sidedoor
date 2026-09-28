@@ -505,6 +505,13 @@ impl Reveal {
         self.shown
     }
 
+    /// Shows the dock now and keeps it up for `duration` unless the pointer
+    /// arrives, as when a shortcut peeks at a widget.
+    pub fn show_for(&mut self, now: Instant, duration: Duration) {
+        self.shown = true;
+        self.outside_since = Some(now + duration.saturating_sub(HIDE_DELAY));
+    }
+
     /// Feeds one pointer sample. `keep` is an extra area, such as an open
     /// card, that also counts as inside. Returns `true` when visibility changed.
     pub fn update(
@@ -758,6 +765,33 @@ mod tests {
         assert!(!reveal.update(on_card, screen, edge, dock, Some(zone), start));
         assert!(!reveal.update(on_card, screen, edge, dock, Some(zone), later));
         assert!(reveal.is_shown());
+    }
+
+    #[test]
+    fn a_peek_stays_up_for_its_duration() {
+        let (screen, edge) = (screen(), Edge::Right);
+        let dock = dock_frame(screen, edge, 3);
+        let away = Point { x: 400.0, y: 400.0 };
+        let start = Instant::now();
+        let mut reveal = Reveal::default();
+        reveal.show_for(start, Duration::from_secs(3));
+        assert!(reveal.is_shown());
+        assert!(!reveal.update(
+            away,
+            screen,
+            edge,
+            dock,
+            None,
+            start + Duration::from_secs(2)
+        ));
+        assert!(reveal.update(
+            away,
+            screen,
+            edge,
+            dock,
+            None,
+            start + Duration::from_secs(3)
+        ));
     }
 
     #[test]

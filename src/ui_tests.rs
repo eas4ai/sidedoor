@@ -538,3 +538,177 @@ fn show_all_opens_the_history_window(cx: &mut TestAppContext) {
     .unwrap();
     assert_eq!(opened.get(), 2);
 }
+
+// MARK: Shortcuts
+
+#[gpui_kit::test]
+fn shortcuts_open_apps_history_and_peek_at_widgets(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![
+            app("com.example.alpha"),
+            ItemConfig::Weather,
+            ItemConfig::Clipboard,
+        ],
+    );
+    let opened = Rc::new(std::cell::Cell::new(0));
+    let count = opened.clone();
+    cx.update(|cx| {
+        cx.subscribe(&h.dock, move |_, event: &crate::dock::DockEvent, _| {
+            if *event == crate::dock::DockEvent::OpenClipboardHistory {
+                count.set(count.get() + 1);
+            }
+        })
+        .detach();
+    });
+
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, cx| {
+            dock.trigger_shortcut("app:com.example.alpha", cx)
+        })
+    });
+    assert_eq!(
+        *h.platform.opened.borrow(),
+        vec![PathBuf::from("/Applications/Alpha.app")]
+    );
+
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.trigger_shortcut("clipboard", cx))
+    });
+    assert_eq!(opened.get(), 1);
+
+    // A widget shortcut shows the dock with that widget's card.
+    assert!(!cx.update(|cx| h.dock.read(cx).is_shown()));
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.trigger_shortcut("weather", cx))
+    });
+    assert!(cx.update(|cx| h.dock.read(cx).is_shown()));
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("weather"));
+}
+
+#[gpui_kit::test]
+fn assigned_shortcuts_are_saved_and_follow_their_item(cx: &mut TestAppContext) {
+    let h = setup(cx, vec![app("com.example.alpha"), app("com.example.beta")]);
+    let shortcut = crate::shortcut::Shortcut::parse("alt-cmd-a").unwrap();
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, cx| {
+            dock.set_shortcut("app:com.example.alpha", Some(shortcut.clone()), cx)
+        })
+    });
+    let saved = h.platform.saved_configs.borrow().last().cloned().unwrap();
+    assert_eq!(
+        saved
+            .shortcuts
+            .get("app:com.example.alpha")
+            .map(String::as_str),
+        Some("alt-cmd-a")
+    );
+    assert_eq!(
+        cx.update(|cx| h
+            .dock
+            .read(cx)
+            .shortcut_owner(&shortcut, "app:com.example.beta")),
+        Some("Alpha".to_string())
+    );
+
+    // Removing the item drops its shortcut too.
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.remove("app:com.example.alpha", cx))
+    });
+    let saved = h.platform.saved_configs.borrow().last().cloned().unwrap();
+    assert!(!saved.shortcuts.contains_key("app:com.example.alpha"));
+}
+
+fn open_recorder(
+    cx: &mut TestAppContext,
+    current: Option<&str>,
+    taken: &'static str,
+) -> (
+    AnyWindowHandle,
+    Entity<crate::shortcut_recorder::ShortcutRecorder>,
+    Rc<std::cell::RefCell<Vec<crate::shortcut_recorder::RecorderEvent>>>,
+) {
+    use crate::{shortcut::Shortcut, shortcut_recorder::*};
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let current = current.and_then(Shortcut::parse);
+    let (window, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        let check: ConflictCheck = Rc::new(move |shortcut, _| {
+            if shortcut.to_config() == taken {
+                Err(format!("Another app already uses {shortcut}."))
+            } else {
+                Ok(())
+            }
+        });
+        let (window, view) = gpui_kit::open_window(options(400.0, 290.0), cx, |window, cx| {
+            cx.new(|cx| {
+                ShortcutRecorder::new(
+                    "Safari",
+                    None,
+                    "icons/app-window.svg".into(),
+                    current,
+                    check,
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap();
+        let log = events.clone();
+        cx.subscribe(&view, move |_, event: &RecorderEvent, _| {
+            log.borrow_mut().push(event.clone())
+        })
+        .detach();
+        (window, view)
+    });
+    (window, view, events)
+}
+
+#[gpui_kit::test]
+fn recorder_saves_a_valid_combination_with_return(cx: &mut TestAppContext) {
+    use crate::{shortcut::Shortcut, shortcut_recorder::RecorderEvent};
+    let (window, view, events) = open_recorder(cx, None, "ctrl-alt-x");
+    let press = |cx: &mut TestAppContext, key: &str| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+        })
+        .unwrap();
+    };
+
+    // A bare letter isn't a shortcut, and Return doesn't save it.
+    press(cx, "k");
+    assert!(cx.update(|cx| view.read(cx).ready().is_none()));
+    press(cx, "enter");
+    assert!(events.borrow().is_empty());
+
+    // Taken elsewhere: reported, not saved.
+    press(cx, "ctrl-alt-x");
+    assert!(cx.update(|cx| view.read(cx).ready().is_none()));
+
+    press(cx, "alt-cmd-s");
+    press(cx, "enter");
+    assert_eq!(
+        *events.borrow(),
+        vec![RecorderEvent::Save(Shortcut::parse("alt-cmd-s").unwrap())]
+    );
+}
+
+#[gpui_kit::test]
+fn recorder_cancels_with_escape_and_removes_existing(cx: &mut TestAppContext) {
+    use crate::shortcut_recorder::RecorderEvent;
+    let (window, _, events) = open_recorder(cx, Some("ctrl-cmd-v"), "");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("remove-shortcut", cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        *events.borrow(),
+        vec![RecorderEvent::Remove, RecorderEvent::Cancel]
+    );
+}

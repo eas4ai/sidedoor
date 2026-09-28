@@ -6,9 +6,12 @@ mod clipboard_window;
 mod config;
 mod dock;
 mod geometry;
+mod hotkeys;
 mod macos;
 mod motion;
 mod platform;
+mod shortcut;
+mod shortcut_recorder;
 mod stats;
 mod status_menu;
 mod style;
@@ -29,11 +32,16 @@ use gpui_kit::{
     WindowBounds, WindowKind, WindowOptions, assets::icon_assets, base::Root, font, point, px,
     size, transparent_black,
 };
+use hotkeys::{HotKeys, RegisterError};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow};
 use platform::Platform;
+use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
 use std::{cell::RefCell, rc::Rc};
-use views::{CardChrome, CardView, DockView, OpenItem, RemoveItem, RevealItem};
+use views::{
+    AssignShortcut, CardChrome, CardView, DockView, OpenItem, RemoveItem, RemoveShortcut,
+    RevealItem,
+};
 
 icon_assets!(
     AppAssets,
@@ -60,6 +68,7 @@ icon_assets!(
         Image,
         Search,
         CircleX,
+        Keyboard,
     ]
 );
 
@@ -120,17 +129,40 @@ struct Panels {
 
 impl Panels {
     fn sync(&mut self, dock: &Entity<Dock>, cx: &mut App) {
-        let label = dock
-            .read(cx)
-            .card()
-            .and_then(|(_, item)| tooltip_text(item));
-        let label_width = label.map_or(0.0, |label| measure(&self.card, &label, cx));
+        // Tooltips are sized to their text: the app name and its shortcut.
+        let labels: Vec<String> = {
+            let model = dock.read(cx);
+            model
+                .card()
+                .and_then(|(_, item)| tooltip_text(item))
+                .into_iter()
+                .chain(
+                    model
+                        .card()
+                        .and_then(|(_, item)| model.shortcut_for(&item.id))
+                        .map(ToString::to_string),
+                )
+                .collect()
+        };
+        let widths: Vec<(String, f64)> = labels
+            .into_iter()
+            .map(|label| {
+                let width = measure(&self.card, &label, cx);
+                (label, width)
+            })
+            .collect();
+        let text_width = |text: &str| {
+            widths
+                .iter()
+                .find(|(label, _)| label == text)
+                .map_or(0.0, |(_, width)| *width)
+        };
         let (shown, frame, hidden_frame, accessibility, placement) = {
             let model = dock.read(cx);
             let frame = model.frame();
             let hidden = geometry::hidden_dock_frame(model.screen(), model.edge, model.items.len());
             let placement = model.card().map(|(index, item)| {
-                let (width, height) = views::card_size(item, model, |_| label_width);
+                let (width, height) = views::card_size(item, model, text_width);
                 geometry::card_placement(model.screen(), frame, model.edge, index, width, height)
             });
             (
@@ -362,6 +394,175 @@ fn open_clipboard_history(
     Ok(())
 }
 
+/// Global shortcuts, and which dock item each registered index opens.
+struct Shortcuts {
+    hotkeys: HotKeys,
+    targets: Vec<String>,
+}
+
+type SharedShortcuts = Rc<RefCell<Option<Shortcuts>>>;
+
+/// Registers the dock's shortcuts, replacing the previous set.
+fn register_shortcuts(dock: &Entity<Dock>, shortcuts: &SharedShortcuts, cx: &mut App) {
+    let list = dock.read(cx).shortcuts();
+    let mut guard = shortcuts.borrow_mut();
+    let Some(shortcuts) = guard.as_mut() else {
+        return;
+    };
+    shortcuts.targets = list.iter().map(|(id, _)| id.clone()).collect();
+    let failures = shortcuts
+        .hotkeys
+        .set(list.iter().map(|(_, shortcut)| shortcut.clone()).collect());
+    for (index, err) in failures {
+        let (id, shortcut) = &list[index];
+        eprintln!("sidekick: couldn't register {shortcut} for {id}: {err:?}");
+    }
+}
+
+/// The shortcut recorder, while it is open.
+#[derive(Default)]
+struct RecorderWindow {
+    handle: Option<AnyWindowHandle>,
+    previous_app: Option<i32>,
+}
+
+fn open_shortcut_recorder(
+    id: &str,
+    dock: &Entity<Dock>,
+    shortcuts: &SharedShortcuts,
+    state: &Rc<RefCell<RecorderWindow>>,
+    cx: &mut App,
+) -> Result<(), String> {
+    // One recorder at a time.
+    if let Some(handle) = state.borrow_mut().handle.take() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+    // Let the user press combinations this app already uses.
+    if let Some(shortcuts) = shortcuts.borrow_mut().as_mut() {
+        shortcuts.hotkeys.suspend();
+    }
+    state.borrow_mut().previous_app = macos::frontmost_app();
+    cx.activate(true);
+
+    let (title, icon, glyph, current) = {
+        let model = dock.read(cx);
+        let index = model
+            .index_of(id)
+            .ok_or("that item is no longer in the dock")?;
+        let item = &model.items[index];
+        let icon = match &item.kind {
+            dock::ItemKind::App(app) => app.icon.clone(),
+            _ => None,
+        };
+        (
+            model.item_name(id),
+            icon,
+            views::widget_glyph(&item.kind),
+            model.shortcut_for(id).cloned(),
+        )
+    };
+    let check: shortcut_recorder::ConflictCheck = {
+        let (dock, shortcuts, id) = (dock.clone(), shortcuts.clone(), id.to_string());
+        Rc::new(move |shortcut, cx| {
+            if let Some(owner) = dock.read(cx).shortcut_owner(shortcut, &id) {
+                return Err(format!("{owner} already uses {shortcut}."));
+            }
+            let guard = shortcuts.borrow();
+            match guard
+                .as_ref()
+                .map(|shortcuts| shortcuts.hotkeys.probe(shortcut))
+            {
+                Some(Err(RegisterError::TakenByAnotherApp)) => {
+                    Err(format!("Another app already uses {shortcut}."))
+                }
+                Some(Err(_)) => Err("That key can't be used in a shortcut.".into()),
+                _ => Ok(()),
+            }
+        })
+    };
+
+    let (width, height) = shortcut_recorder::WINDOW_SIZE;
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(width), px(height)),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Assign Shortcut".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(14.0), px(14.0))),
+        }),
+        is_resizable: false,
+        is_minimizable: false,
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| ShortcutRecorder::new(title, icon, glyph, current, check, window, cx))
+    })
+    .map_err(|err| err.to_string())?;
+    handle
+        .update(cx, |_, window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                root.style()
+                    .refine(&StyleRefinement::default().bg(transparent_black()));
+            });
+            if let Some(native) = macos::ns_window(window) {
+                macos::add_window_material(&native);
+                if !cx.reduce_motion() {
+                    macos::fade_in(&native);
+                }
+            }
+        })
+        .ok();
+
+    let (dock, shortcuts, state_for_events, id) = (
+        dock.clone(),
+        shortcuts.clone(),
+        state.clone(),
+        id.to_string(),
+    );
+    cx.subscribe(&view, move |_, event: &RecorderEvent, cx| {
+        match event {
+            RecorderEvent::Save(shortcut) => {
+                dock.update(cx, |dock, cx| {
+                    dock.set_shortcut(&id, Some(shortcut.clone()), cx)
+                });
+            }
+            RecorderEvent::Remove => {
+                dock.update(cx, |dock, cx| dock.set_shortcut(&id, None, cx));
+            }
+            RecorderEvent::Cancel | RecorderEvent::Closed => {}
+        }
+        let (handle, previous) = {
+            let mut state = state_for_events.borrow_mut();
+            (state.handle.take(), state.previous_app.take())
+        };
+        // The close button already closes the window.
+        if *event != RecorderEvent::Closed
+            && let Some(handle) = handle
+        {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+        if let Some(shortcuts) = shortcuts.borrow_mut().as_mut() {
+            for (index, err) in shortcuts.hotkeys.resume() {
+                eprintln!("sidekick: couldn't register shortcut {index}: {err:?}");
+            }
+        }
+        if let Some(pid) = previous {
+            macos::activate_app(pid);
+        }
+    })
+    .detach();
+    state.borrow_mut().handle = Some(handle);
+    Ok(())
+}
+
 fn run(cx: &mut App) -> Result<(), String> {
     gpui_kit::init(cx);
     macos::set_accessory_policy();
@@ -403,16 +604,50 @@ fn run(cx: &mut App) -> Result<(), String> {
     )?;
     macos::hide_card(&card_panel.window, (0.0, 0.0));
 
+    // Global shortcuts: each registered index maps to a dock item.
+    let shortcuts: SharedShortcuts = Rc::new(RefCell::new(None));
+    let hotkeys = HotKeys::install({
+        let (cx, dock, shortcuts) = (cx.to_async(), dock.clone(), shortcuts.clone());
+        move |index| {
+            let target = shortcuts
+                .borrow()
+                .as_ref()
+                .and_then(|shortcuts| shortcuts.targets.get(index).cloned());
+            if let Some(id) = target {
+                cx.update(|cx| dock.update(cx, |dock, cx| dock.trigger_shortcut(&id, cx)));
+            }
+        }
+    });
+    *shortcuts.borrow_mut() = Some(Shortcuts {
+        hotkeys,
+        targets: Vec::new(),
+    });
+    register_shortcuts(&dock, &shortcuts, cx);
+
     let history_window = Rc::new(RefCell::new(HistoryWindow::default()));
     let opener = dock.clone();
+    let registry = shortcuts.clone();
     cx.subscribe(&dock, move |_, event, cx| match event {
         DockEvent::OpenClipboardHistory => {
             if let Err(err) = open_clipboard_history(&opener, &history_window, cx) {
                 eprintln!("sidekick: couldn't open Clipboard History: {err}");
             }
         }
+        DockEvent::ShortcutsChanged => register_shortcuts(&opener, &registry, cx),
     })
     .detach();
+
+    let recorder = Rc::new(RefCell::new(RecorderWindow::default()));
+    let (handler, registry) = (dock.clone(), shortcuts.clone());
+    cx.on_action(move |action: &AssignShortcut, cx| {
+        if let Err(err) = open_shortcut_recorder(&action.id, &handler, &registry, &recorder, cx) {
+            eprintln!("sidekick: couldn't open the shortcut recorder: {err}");
+        }
+    });
+    let handler = dock.clone();
+    cx.on_action(move |action: &RemoveShortcut, cx| {
+        handler.update(cx, |dock, cx| dock.set_shortcut(&action.id, None, cx));
+    });
 
     let handler = dock.clone();
     cx.on_action(move |action: &RemoveItem, cx| {

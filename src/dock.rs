@@ -6,12 +6,13 @@ use crate::{
     config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation},
     geometry::{self, Edge, Rect, Reveal, Screen},
     platform::{Accessibility, AppInfo, Platform},
+    shortcut::Shortcut,
     stats::{Sampler, Snapshot},
     weather::{self, Weather},
 };
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
@@ -25,6 +26,8 @@ const WEATHER_INTERVAL: Duration = Duration::from_secs(20 * 60);
 const WEATHER_RETRY: Duration = Duration::from_secs(60);
 /// How long "Clear History" waits for its confirming second click.
 const CLEAR_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
+/// How long a shortcut shows a widget's card before tucking the dock away.
+const PEEK: Duration = Duration::from_secs(3);
 /// Grace period before a card closes, so the pointer can travel onto it.
 const CARD_CLOSE_DELAY: Duration = Duration::from_millis(160);
 
@@ -78,6 +81,8 @@ impl DockItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockEvent {
     OpenClipboardHistory,
+    /// Shortcuts were assigned or removed; re-register them.
+    ShortcutsChanged,
 }
 
 impl EventEmitter<DockEvent> for Dock {}
@@ -100,6 +105,8 @@ pub struct Dock {
     pub edge: Edge,
     appearance: Appearance,
     pub location: WeatherLocation,
+    /// Global shortcuts by item id.
+    shortcuts: BTreeMap<String, Shortcut>,
     pub running: HashSet<String>,
     pub accessibility: Accessibility,
     pub stats: Option<Snapshot>,
@@ -133,6 +140,17 @@ impl Dock {
         cx: &mut Context<Self>,
     ) -> Self {
         let items = resolve_items(&config.items, platform.as_ref());
+        let shortcuts = config
+            .shortcuts
+            .iter()
+            .filter_map(|(id, text)| match Shortcut::parse(text) {
+                Some(shortcut) => Some((id.clone(), shortcut)),
+                None => {
+                    eprintln!("sidekick: ignoring the shortcut \"{text}\" for {id}");
+                    None
+                }
+            })
+            .collect();
         let mut tasks = Vec::new();
         if services.live {
             tasks.push(every(POINTER_INTERVAL, cx, Self::poll_pointer));
@@ -151,6 +169,7 @@ impl Dock {
             edge: config.edge,
             appearance: config.appearance,
             location: config.weather,
+            shortcuts,
             stats: None,
             cpu_history: VecDeque::new(),
             weather: WeatherState::Loading,
@@ -324,24 +343,105 @@ impl Dock {
     pub fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(index) = self.index_of(id) {
             self.items.remove(index);
+            if self.shortcuts.remove(id).is_some() {
+                cx.emit(DockEvent::ShortcutsChanged);
+            }
             self.items_changed(cx);
         }
+    }
+
+    // MARK: Shortcuts
+
+    pub fn shortcut_for(&self, id: &str) -> Option<&Shortcut> {
+        self.shortcuts.get(id)
+    }
+
+    /// Every shortcut, in dock order.
+    pub fn shortcuts(&self) -> Vec<(String, Shortcut)> {
+        self.items
+            .iter()
+            .filter_map(|item| {
+                let shortcut = self.shortcuts.get(item.id.as_ref())?;
+                Some((item.id.to_string(), shortcut.clone()))
+            })
+            .collect()
+    }
+
+    /// The item already using `shortcut`, other than `except`.
+    pub fn shortcut_owner(&self, shortcut: &Shortcut, except: &str) -> Option<String> {
+        self.shortcuts
+            .iter()
+            .find(|(id, existing)| *existing == shortcut && id.as_str() != except)
+            .map(|(id, _)| self.item_name(id))
+    }
+
+    /// What an item is called in menus and messages.
+    pub fn item_name(&self, id: &str) -> String {
+        match self.index_of(id).map(|index| &self.items[index].kind) {
+            Some(ItemKind::App(app)) => app.name.clone(),
+            Some(ItemKind::Weather) => "Weather".into(),
+            Some(ItemKind::Stats) => "Stats".into(),
+            Some(ItemKind::Clipboard) => "Clipboard".into(),
+            None => id.to_string(),
+        }
+    }
+
+    pub fn set_shortcut(&mut self, id: &str, shortcut: Option<Shortcut>, cx: &mut Context<Self>) {
+        let changed = match shortcut {
+            Some(shortcut) => {
+                self.shortcuts.insert(id.to_string(), shortcut.clone()) != Some(shortcut)
+            }
+            None => self.shortcuts.remove(id).is_some(),
+        };
+        if changed {
+            self.save_config();
+            cx.emit(DockEvent::ShortcutsChanged);
+            cx.notify();
+        }
+    }
+
+    /// What pressing an item's shortcut does: apps open, Clipboard opens its
+    /// history, other widgets show their card for a moment.
+    pub fn trigger_shortcut(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        match self.items[index].kind {
+            ItemKind::App(_) | ItemKind::Clipboard => self.activate(index, cx),
+            ItemKind::Weather | ItemKind::Stats => self.peek(index, cx),
+        }
+    }
+
+    fn peek(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.reveal.show_for(Instant::now(), PEEK);
+        self.close_card = None;
+        self.card = Some(index);
+        cx.notify();
     }
 
     fn items_changed(&mut self, cx: &mut Context<Self>) {
         self.card = None;
         self.pointer_on_item = None;
         self.close_card = None;
+        self.save_config();
+        cx.notify();
+    }
+
+    fn save_config(&self) {
         let config = Config {
             items: self.items.iter().map(DockItem::config).collect(),
             edge: self.edge,
             appearance: self.appearance,
             weather: self.location.clone(),
+            shortcuts: self
+                .shortcuts
+                .iter()
+                .map(|(id, shortcut)| (id.clone(), shortcut.to_config()))
+                .collect(),
         };
         if let Err(err) = self.platform.save_config(&config) {
             eprintln!("sidekick: couldn't save the dock: {err}");
         }
-        cx.notify();
     }
 
     // MARK: Clipboard

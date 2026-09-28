@@ -39,6 +39,8 @@ pub struct Palette {
     pub segment: Hsla,
     /// Text and glyphs on an accent-colored background.
     pub on_accent: Hsla,
+    /// A key drawn as a keycap.
+    pub keycap: Hsla,
     pub blue: Hsla,
     pub green: Hsla,
     pub orange: Hsla,
@@ -83,6 +85,7 @@ impl Palette {
             accent_fill: color(0x007aff33),
             segment: color(0xffffffff),
             on_accent: color(0xffffffff),
+            keycap: color(0xffffffff),
             blue: color(0x007affff),
             green: color(0x28cd41ff),
             orange: color(0xff9500ff),
@@ -105,6 +108,7 @@ impl Palette {
             accent_fill: color(0x0a84ff40),
             segment: color(0xffffff2e),
             on_accent: color(0xffffffff),
+            keycap: color(0xffffff1f),
             blue: color(0x0a84ffff),
             green: color(0x32d74bff),
             orange: color(0xff9f0aff),

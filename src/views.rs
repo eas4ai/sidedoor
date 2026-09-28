@@ -30,6 +30,8 @@ const APP_ICON: f32 = 44.0;
 const TILE: f32 = 36.0;
 const TOOLTIP_HEIGHT: f64 = 28.0;
 const TOOLTIP_PADDING: f64 = 24.0;
+/// Space between a tooltip's name and its shortcut.
+const TOOLTIP_HINT_GAP: f64 = 8.0;
 const CARD_WIDTH: f64 = 300.0;
 const WEATHER_HEIGHT: f64 = 190.0;
 const STATS_HEIGHT: f64 = 206.0;
@@ -58,11 +60,31 @@ pub struct RemoveItem {
     pub id: SharedString,
 }
 
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = sidekick, no_json)]
+pub struct AssignShortcut {
+    pub id: SharedString,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = sidekick, no_json)]
+pub struct RemoveShortcut {
+    pub id: SharedString,
+}
+
 /// Size of the card or tooltip for `item`, arrow excluded. `text_width`
 /// measures a tooltip label in points.
 pub fn card_size(item: &DockItem, dock: &Dock, text_width: impl Fn(&str) -> f64) -> (f64, f64) {
     match &item.kind {
-        ItemKind::App(app) => (text_width(&app.name) + TOOLTIP_PADDING, TOOLTIP_HEIGHT),
+        ItemKind::App(app) => {
+            let hint = dock.shortcut_for(&item.id).map_or(0.0, |shortcut| {
+                TOOLTIP_HINT_GAP + text_width(&shortcut.to_string())
+            });
+            (
+                text_width(&app.name) + hint + TOOLTIP_PADDING,
+                TOOLTIP_HEIGHT,
+            )
+        }
         ItemKind::Weather => (CARD_WIDTH, WEATHER_HEIGHT),
         ItemKind::Stats => (CARD_WIDTH, STATS_HEIGHT),
         ItemKind::Clipboard => {
@@ -284,8 +306,9 @@ impl Render for DockView {
                         clipboard_tile(dock.history.len(), motion.scale, palette)
                     }
                 };
+                let shortcut = dock.shortcut_for(&item.id).map(ToString::to_string);
                 slot(
-                    &self.dock, &view, index, item, content, motion, edge, palette,
+                    &self.dock, &view, index, item, content, motion, edge, shortcut, palette,
                 )
             })
             .collect();
@@ -360,6 +383,7 @@ fn slot(
     content: AnyElement,
     motion: SlotMotion,
     edge: Edge,
+    shortcut: Option<String>,
     palette: Palette,
 ) -> AnyElement {
     let dragged = DraggedSlot {
@@ -425,7 +449,23 @@ fn slot(
                         .menu("Show in Finder", Box::new(RevealItem { id: id.clone() }))
                         .separator();
                 }
-                menu.menu("Remove from Dock", Box::new(RemoveItem { id: id.clone() }))
+                menu = match &shortcut {
+                    Some(keys) => menu
+                        .menu(
+                            format!("Change Shortcut ({keys})…"),
+                            Box::new(AssignShortcut { id: id.clone() }),
+                        )
+                        .menu(
+                            "Remove Shortcut",
+                            Box::new(RemoveShortcut { id: id.clone() }),
+                        ),
+                    None => menu.menu(
+                        "Assign Shortcut…",
+                        Box::new(AssignShortcut { id: id.clone() }),
+                    ),
+                };
+                menu.separator()
+                    .menu("Remove from Dock", Box::new(RemoveItem { id: id.clone() }))
                     .show(event.position, window, cx);
                 cx.stop_propagation();
             },
@@ -462,7 +502,7 @@ fn slot(
     element.into_any_element()
 }
 
-fn widget_glyph(kind: &ItemKind) -> SharedString {
+pub fn widget_glyph(kind: &ItemKind) -> SharedString {
     match kind {
         ItemKind::Weather => IconName::Cloud.path(),
         ItemKind::Stats => IconName::Cpu.path(),
@@ -695,7 +735,11 @@ impl Render for CardView {
         let placement = self.chrome.read(cx).placement;
         let content = dock.card().map(|(_, item)| {
             let content = match &item.kind {
-                ItemKind::App(app) => tooltip(&app.name),
+                ItemKind::App(app) => tooltip(
+                    &app.name,
+                    dock.shortcut_for(&item.id).map(ToString::to_string),
+                    palette,
+                ),
                 ItemKind::Weather => weather_card(dock, palette),
                 ItemKind::Stats => stats_card(dock, readings.as_ref(), palette),
                 ItemKind::Clipboard => clipboard_card(&self.dock, dock, animate, palette),
@@ -797,14 +841,16 @@ fn silhouette(placement: CardPlacement, fill: Hsla, stroke: Hsla) -> impl IntoEl
     .size_full()
 }
 
-fn tooltip(name: &str) -> AnyElement {
+fn tooltip(name: &str, shortcut: Option<String>, palette: Palette) -> AnyElement {
     div()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
+        .gap(px(TOOLTIP_HINT_GAP as f32))
         .text_size(px(text::CALLOUT))
         .child(name.to_string())
+        .children(shortcut.map(|shortcut| div().text_color(palette.secondary).child(shortcut)))
         .into_any_element()
 }
 
