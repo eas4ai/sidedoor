@@ -19,14 +19,15 @@ mod weather;
 mod ui_tests;
 
 use clipboard::History;
-use config::Config;
 use clipboard_window::{ClipboardWindow, ClipboardWindowEvent};
+use config::Config;
 use dock::{Dock, DockEvent, Services};
 use geometry::{CardPlacement, Rect};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, FontWeight, Refineable as _,
-    StyleRefinement, Styled as _, TextRun, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, assets::icon_assets, base::Root, font, point, px, size, transparent_black,
+    StyleRefinement, Styled as _, TextRun, TitlebarOptions, WindowBackgroundAppearance,
+    WindowBounds, WindowKind, WindowOptions, assets::icon_assets, base::Root, font, point, px,
+    size, transparent_black,
 };
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow};

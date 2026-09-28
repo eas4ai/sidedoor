@@ -27,6 +27,14 @@ pub const CONTEXT: &str = "ClipboardHistory";
 pub const TOOLBAR_HEIGHT: f32 = 52.0;
 const LIST_WIDTH: f32 = 290.0;
 const ROW_HEIGHT: f32 = 34.0;
+const FOOTER_HEIGHT: f32 = 44.0;
+const DETAIL_PADDING: f32 = 14.0;
+const DETAIL_GAP: f32 = 12.0;
+const INFO_TITLE: f32 = 16.0;
+const INFO_ROW: f32 = 24.0;
+const INFO_GAP: f32 = 4.0;
+/// Space between an image preview and its frame.
+const IMAGE_INSET: f32 = 10.0;
 
 /// What the window asks of the app around it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +111,7 @@ impl ClipboardWindow {
         this
     }
 
+    #[cfg(test)]
     pub fn selected(&self) -> Option<u64> {
         self.selected
     }
@@ -188,8 +197,12 @@ impl ClipboardWindow {
                 if self.query.is_empty() {
                     cx.emit(ClipboardWindowEvent::Dismiss { copied: false });
                 } else {
+                    // Setting the value programmatically emits no change event.
                     self.search
                         .update(cx, |search, cx| search.set_value("", window, cx));
+                    self.query = SharedString::default();
+                    self.keep_selection_valid(cx);
+                    cx.notify();
                 }
             }
             _ => return false,
@@ -256,12 +269,22 @@ impl Render for ClipboardWindow {
             .flex_1()
             .min_w_0()
             .h_full()
-            .p(px(14.0))
+            .p(px(DETAIL_PADDING))
             .flex()
             .flex_col()
-            .gap(px(12.0))
-            .children(selected.map(|entry| preview(&self.dock, entry, palette)))
-            .children(selected.map(|entry| information(entry, offset, palette)));
+            .gap(px(DETAIL_GAP))
+            .children(selected.map(|entry| {
+                let rows = information_rows(entry, offset);
+                let image_box = image_box(window.viewport_size(), rows.len());
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(DETAIL_GAP))
+                    .child(preview(&self.dock, entry, image_box, palette))
+                    .child(information(rows, palette))
+            }));
 
         div()
             .key_context(CONTEXT)
@@ -406,14 +429,22 @@ fn thumbnail(kind: &ClipKind, selected: bool, palette: Palette) -> AnyElement {
             .size(px(22.0))
             .flex_shrink_0()
             .rounded(px(5.0))
-            .bg(if selected { palette.on_accent.opacity(0.2) } else { palette.fill })
+            .bg(if selected {
+                palette.on_accent.opacity(0.2)
+            } else {
+                palette.fill
+            })
             .flex()
             .items_center()
             .justify_center()
             .child(glyph(
                 kind_glyph(kind),
                 12.0,
-                if selected { palette.on_accent } else { palette.secondary },
+                if selected {
+                    palette.on_accent
+                } else {
+                    palette.secondary
+                },
             ))
             .into_any_element(),
     }
@@ -485,8 +516,44 @@ fn small_button(
         .child(label)
 }
 
-fn preview(dock: &Entity<Dock>, entry: &ClipEntry, palette: Palette) -> impl IntoElement {
+/// The space an image preview gets, from the window's fixed layout. GPUI
+/// sizes a loaded image by its aspect ratio, so it needs an explicit box.
+fn image_box(viewport: gpui_kit::Size<gpui_kit::Pixels>, info_rows: usize) -> (f32, f32) {
+    let info = INFO_TITLE + info_rows as f32 * (INFO_ROW + INFO_GAP);
+    let width = f32::from(viewport.width) - LIST_WIDTH - 1.0 - 2.0 * DETAIL_PADDING;
+    let height = f32::from(viewport.height)
+        - TOOLBAR_HEIGHT
+        - FOOTER_HEIGHT
+        - 2.0
+        - 2.0 * DETAIL_PADDING
+        - DETAIL_GAP
+        - info;
+    (
+        (width - 2.0 * IMAGE_INSET).max(0.0),
+        (height - 2.0 * IMAGE_INSET).max(0.0),
+    )
+}
+
+/// The largest size with the image's proportions that fits in `space`,
+/// never larger than its native size (pixels are half-points on Retina).
+fn fit(width: u32, height: u32, space: (f32, f32)) -> (f32, f32) {
+    if width == 0 || height == 0 {
+        return space;
+    }
+    let (width, height) = (width as f32, height as f32);
+    let scale = (space.0 / width).min(space.1 / height).min(0.5);
+    (width * scale, height * scale)
+}
+
+fn preview(
+    dock: &Entity<Dock>,
+    entry: &ClipEntry,
+    image_box: (f32, f32),
+    palette: Palette,
+) -> impl IntoElement {
     let frame = div()
+        .id("preview-frame")
+        .test_support()
         .flex_1()
         .min_h_0()
         .rounded(px(10.0))
@@ -501,15 +568,28 @@ fn preview(dock: &Entity<Dock>, entry: &ClipEntry, palette: Palette) -> impl Int
             .line_height(relative(1.45))
             .child(text.clone())
             .into_any_element(),
-        ClipKind::Image { path, .. } => div()
-            .size_full()
-            .p(px(10.0))
-            .child(
-                img(path.clone())
-                    .size_full()
-                    .object_fit(ObjectFit::Contain),
-            )
-            .into_any_element(),
+        // Pinned to the frame so the image has a definite box to fit into.
+        ClipKind::Image {
+            path,
+            width,
+            height,
+        } => {
+            let (w, h) = fit(*width, *height, image_box);
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    img(path.clone())
+                        .id("preview-image")
+                        .w(px(w))
+                        .h(px(h))
+                        .object_fit(ObjectFit::Contain)
+                        .test_support(),
+                )
+                .into_any_element()
+        }
         ClipKind::Link { url } => {
             let dock = dock.clone();
             let target = url.clone();
@@ -550,9 +630,14 @@ fn preview(dock: &Entity<Dock>, entry: &ClipEntry, palette: Palette) -> impl Int
                         .text_center()
                         .child(folder),
                 )
-                .child(small_button("reveal-file", "Show in Finder", palette, move |cx| {
-                    dock.read(cx).reveal_path(&target);
-                }))
+                .child(small_button(
+                    "reveal-file",
+                    "Show in Finder",
+                    palette,
+                    move |cx| {
+                        dock.read(cx).reveal_path(&target);
+                    },
+                ))
                 .into_any_element()
         }
     };
@@ -569,7 +654,7 @@ fn centered_stack() -> Div {
         .gap(px(10.0))
 }
 
-fn information(entry: &ClipEntry, utc_offset: i64, palette: Palette) -> impl IntoElement {
+fn information_rows(entry: &ClipEntry, utc_offset: i64) -> Vec<(&'static str, String)> {
     let mut rows: Vec<(&'static str, String)> = vec![
         (
             "Source",
@@ -592,14 +677,18 @@ fn information(entry: &ClipEntry, utc_offset: i64, palette: Palette) -> impl Int
         "Copied",
         clipboard::format_timestamp(entry.copied_at, utc_offset),
     ));
+    rows
+}
 
+fn information(rows: Vec<(&'static str, String)>, palette: Palette) -> impl IntoElement {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .gap(px(4.0))
+        .gap(px(INFO_GAP))
         .child(
             div()
+                .h(px(INFO_TITLE))
                 .px(px(10.0))
                 .text_size(px(text::SUBHEADLINE))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -608,7 +697,7 @@ fn information(entry: &ClipEntry, utc_offset: i64, palette: Palette) -> impl Int
         )
         .children(rows.into_iter().enumerate().map(|(index, (label, value))| {
             div()
-                .h(px(24.0))
+                .h(px(INFO_ROW))
                 .px(px(10.0))
                 .rounded(px(5.0))
                 .when(index % 2 == 0, |row| row.bg(palette.fill))
@@ -657,7 +746,7 @@ fn footer(
     };
 
     div()
-        .h(px(44.0))
+        .h(px(FOOTER_HEIGHT))
         .flex_shrink_0()
         .px(px(12.0))
         .border_t_1()
@@ -685,7 +774,11 @@ fn footer(
                         .justify_center()
                         .child(glyph(IconName::Clipboard, 11.0, palette.on_accent)),
                 )
-                .child(div().font_weight(FontWeight::MEDIUM).child("Clipboard History"))
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Clipboard History"),
+                )
                 .child(div().text_color(palette.secondary).child(total.to_string())),
         )
         .child(
@@ -707,4 +800,17 @@ fn footer(
                     ClipboardWindow::delete_selected,
                 )),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit;
+
+    #[test]
+    fn images_fit_without_growing_past_native_size() {
+        assert_eq!(fit(512, 512, (400.0, 200.0)), (200.0, 200.0));
+        assert_eq!(fit(2000, 1000, (400.0, 400.0)), (400.0, 200.0));
+        // A small image stays at its own size.
+        assert_eq!(fit(64, 32, (400.0, 400.0)), (32.0, 16.0));
+    }
 }

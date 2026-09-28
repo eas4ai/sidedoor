@@ -3,6 +3,7 @@
 
 use crate::{
     clipboard::{ClipKind, History},
+    clipboard_window::{ClipboardWindow, ClipboardWindowEvent},
     config::{Config, ItemConfig},
     dock::{Dock, Services},
     geometry::{self, Point},
@@ -346,4 +347,194 @@ fn copies_show_in_the_card_and_click_to_copy_back(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 0);
+}
+
+// MARK: Clipboard History window
+
+struct HistoryHarness {
+    platform: Rc<FakePlatform>,
+    dock: Entity<Dock>,
+    window: AnyWindowHandle,
+    view: Entity<ClipboardWindow>,
+    events: Rc<std::cell::RefCell<Vec<ClipboardWindowEvent>>>,
+}
+
+fn open_history(cx: &mut TestAppContext, copies: &[&str]) -> HistoryHarness {
+    let h = setup(cx, vec![ItemConfig::Clipboard]);
+    for copy in copies {
+        h.platform.copy(ClipKind::from_text((*copy).into()));
+        cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
+    }
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (window, view) = cx.update(|cx| {
+        let (window, view) = gpui_kit::open_window(options(780.0, 500.0), cx, |window, cx| {
+            cx.new(|cx| ClipboardWindow::new(h.dock.clone(), window, cx))
+        })
+        .unwrap();
+        let log = events.clone();
+        cx.subscribe(&view, move |_, event: &ClipboardWindowEvent, _| {
+            log.borrow_mut().push(*event);
+        })
+        .detach();
+        (window, view)
+    });
+    HistoryHarness {
+        platform: h.platform,
+        dock: h.dock,
+        window,
+        view,
+        events,
+    }
+}
+
+impl HistoryHarness {
+    fn selected_title(&self, cx: &mut TestAppContext) -> Option<String> {
+        cx.update(|cx| {
+            let id = self.view.read(cx).selected()?;
+            let dock = self.dock.read(cx);
+            let entry = dock.history.entries.iter().find(|entry| entry.id == id)?;
+            Some(entry.kind.title())
+        })
+    }
+
+    fn press(&self, cx: &mut TestAppContext, key: &str) {
+        cx.update_window(self.window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn history_window_filters_as_you_type_and_moves_with_arrows(cx: &mut TestAppContext) {
+    let h = open_history(cx, &["alpha notes", "beta link list", "gamma notes"]);
+    // Newest first, and the newest is selected.
+    assert_eq!(h.selected_title(cx).as_deref(), Some("gamma notes"));
+
+    h.press(cx, "down");
+    assert_eq!(h.selected_title(cx).as_deref(), Some("beta link list"));
+    h.press(cx, "up");
+    h.press(cx, "up");
+    assert_eq!(h.selected_title(cx).as_deref(), Some("gamma notes"));
+
+    cx.update_window(h.window, |_, window, cx| window.input("notes", cx))
+        .unwrap();
+    // The search field reports the change once that update has finished.
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("history-row", 2u64)).is_none());
+        assert!(window.find(("history-row", 1u64)).visible());
+    })
+    .unwrap();
+    h.press(cx, "down");
+    assert_eq!(h.selected_title(cx).as_deref(), Some("alpha notes"));
+
+    // Escape clears the search first, then closes.
+    h.press(cx, "escape");
+    assert!(h.events.borrow().is_empty());
+    h.press(cx, "escape");
+    assert_eq!(
+        *h.events.borrow(),
+        vec![ClipboardWindowEvent::Dismiss { copied: false }]
+    );
+}
+
+#[gpui_kit::test]
+fn history_window_copies_with_return_and_deletes_with_cmd_backspace(cx: &mut TestAppContext) {
+    let h = open_history(cx, &["first", "second", "third"]);
+    h.press(cx, "down");
+    h.press(cx, "cmd-backspace");
+    assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 2);
+    // The next entry down takes the selection.
+    assert_eq!(h.selected_title(cx).as_deref(), Some("first"));
+
+    h.press(cx, "enter");
+    assert_eq!(
+        *h.platform.written.borrow(),
+        vec![ClipKind::Text {
+            text: "first".into()
+        }]
+    );
+    assert_eq!(
+        *h.events.borrow(),
+        vec![ClipboardWindowEvent::Dismiss { copied: true }]
+    );
+}
+
+#[gpui_kit::test]
+fn history_window_filter_segments_narrow_by_type(cx: &mut TestAppContext) {
+    let h = open_history(cx, &["plain words", "https://example.com/page"]);
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        // Filters: All, Text, Links, Images, Files.
+        window.click(("filter", 2usize), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(("history-row", 1u64)).is_none());
+        assert!(window.find(("history-row", 2u64)).visible());
+    })
+    .unwrap();
+    assert_eq!(
+        h.selected_title(cx).as_deref(),
+        Some("https://example.com/page")
+    );
+}
+
+#[gpui_kit::test]
+fn image_previews_fit_their_frame(cx: &mut TestAppContext) {
+    let h = open_history(cx, &[]);
+    h.platform.copy(ClipKind::Image {
+        path: "/tmp/sidekick-missing.png".into(),
+        width: 512,
+        height: 512,
+    });
+    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        let frame = window.find("preview-frame").bounds();
+        let image = window.find("preview-image").bounds();
+        assert!(image.size.height <= frame.size.height);
+        assert!(image.size.width <= frame.size.width);
+        // Square in, square out, centered in the frame.
+        assert_eq!(image.size.width, image.size.height);
+        let center = |b: gpui_kit::Bounds<gpui_kit::Pixels>| b.center();
+        assert!((center(image).y - center(frame).y).abs() < px(1.0));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn show_all_opens_the_history_window(cx: &mut TestAppContext) {
+    let h = setup(cx, vec![ItemConfig::Clipboard]);
+    h.platform.copy(ClipKind::from_text("hello".into()));
+    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
+    let opened = Rc::new(std::cell::Cell::new(0));
+    let count = opened.clone();
+    cx.update(|cx| {
+        cx.subscribe(&h.dock, move |_, event: &crate::dock::DockEvent, _| {
+            if *event == crate::dock::DockEvent::OpenClipboardHistory {
+                count.set(count.get() + 1);
+            }
+        })
+        .detach();
+    });
+    h.reveal(cx);
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("clipboard", cx);
+    })
+    .unwrap();
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("show-all-history", cx);
+    })
+    .unwrap();
+    assert_eq!(opened.get(), 1);
+    // Clicking the clipboard tile itself opens it too.
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("clipboard", cx);
+    })
+    .unwrap();
+    assert_eq!(opened.get(), 2);
 }

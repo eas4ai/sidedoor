@@ -18,13 +18,13 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAnimatablePropertyContainer, NSAnimationContext, NSAppearance, NSAppearanceNameAqua,
-    NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy,
-    NSAutoresizingMaskOptions, NSBezierPath, NSBitmapImageFileType, NSBitmapImageRep,
-    NSDeviceRGBColorSpace, NSEvent, NSGraphicsContext, NSPasteboard, NSPasteboardTypeFileURL,
-    NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSScreen, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSApplicationActivationOptions, NSRunningApplication, NSWindow, NSWindowOrderingMode,
-    NSWindowStyleMask, NSWorkspace,
+    NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationOptions,
+    NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBezierPath, NSBitmapImageFileType,
+    NSBitmapImageRep, NSDeviceRGBColorSpace, NSEvent, NSGraphicsContext, NSPasteboard,
+    NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
+    NSRunningApplication, NSScreen, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSBundle, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSTimeZone, NSURL,
@@ -97,7 +97,8 @@ pub fn add_window_material(window: &NSWindow) {
     let Some(content) = window.contentView() else {
         return;
     };
-    let view = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm()), content.bounds());
+    let view =
+        NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm()), content.bounds());
     view.setMaterial(NSVisualEffectMaterial::Sidebar);
     view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     view.setState(NSVisualEffectState::FollowsWindowActiveState);

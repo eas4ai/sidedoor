@@ -66,8 +66,27 @@ impl ClipKind {
 
     fn same_content(&self, other: &Self) -> bool {
         match (self, other) {
-            // Each image copy is saved to its own file, so images never merge.
-            (Self::Image { .. }, Self::Image { .. }) => false,
+            // Each copy is saved to its own file; the same picture copied
+            // twice has identical bytes.
+            (
+                Self::Image {
+                    path: a,
+                    width: wa,
+                    height: ha,
+                },
+                Self::Image {
+                    path: b,
+                    width: wb,
+                    height: hb,
+                },
+            ) => {
+                (wa, ha) == (wb, hb)
+                    && (a == b
+                        || matches!(
+                            (std::fs::read(a), std::fs::read(b)),
+                            (Ok(x), Ok(y)) if x == y
+                        ))
+            }
             _ => self == other,
         }
     }
@@ -137,7 +156,15 @@ impl History {
             existing.copied_at = now;
             existing.source = source.or(existing.source);
             self.entries.push_front(existing);
-            return Vec::new();
+            // A repeated image arrives as a fresh file the history won't use.
+            return match (&kind, &self.entries[0].kind) {
+                (ClipKind::Image { path: new, .. }, ClipKind::Image { path: kept, .. })
+                    if new != kept =>
+                {
+                    vec![new.clone()]
+                }
+                _ => Vec::new(),
+            };
         }
         self.next_id += 1;
         self.entries.push_front(ClipEntry {
@@ -432,30 +459,74 @@ mod tests {
     fn search_matches_every_word_and_the_filter() {
         let history = history(vec![
             text("Standup notes: shipped the tint picker"),
-            ClipKind::Link { url: "https://github.com/zed-industries/zed".into() },
+            ClipKind::Link {
+                url: "https://github.com/zed-industries/zed".into(),
+            },
             text("Grocery list"),
-            ClipKind::File { path: "/Users/me/Project brief.pdf".into() },
+            ClipKind::File {
+                path: "/Users/me/Project brief.pdf".into(),
+            },
         ]);
         let titles = |query: &str, filter| -> Vec<String> {
-            search(&history, query, filter).iter().map(|e| e.kind.title()).collect()
+            search(&history, query, filter)
+                .iter()
+                .map(|e| e.kind.title())
+                .collect()
         };
         assert_eq!(titles("", Filter::All).len(), 4);
-        assert_eq!(titles("TINT standup", Filter::All), ["Standup notes: shipped the tint picker"]);
+        assert_eq!(
+            titles("TINT standup", Filter::All),
+            ["Standup notes: shipped the tint picker"]
+        );
         assert_eq!(titles("zed", Filter::Text), Vec::<String>::new());
-        assert_eq!(titles("", Filter::Links), ["https://github.com/zed-industries/zed"]);
+        assert_eq!(
+            titles("", Filter::Links),
+            ["https://github.com/zed-industries/zed"]
+        );
         assert_eq!(titles("brief", Filter::Files), ["Project brief.pdf"]);
         // The source app is searchable too.
         assert_eq!(titles("notes", Filter::All).len(), 4);
     }
 
     #[test]
+    fn the_same_image_copied_twice_is_one_entry() {
+        let dir = std::env::temp_dir().join(format!("sidekick-dup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, second, other) = (dir.join("1.png"), dir.join("2.png"), dir.join("3.png"));
+        std::fs::write(&first, b"same pixels").unwrap();
+        std::fs::write(&second, b"same pixels").unwrap();
+        std::fs::write(&other, b"other pixels").unwrap();
+        let image = |path: &PathBuf| ClipKind::Image {
+            path: path.clone(),
+            width: 4,
+            height: 4,
+        };
+
+        let mut history = History::default();
+        history.push(image(&first), None, 1);
+        let unused = history.push(image(&second), None, 2);
+        assert_eq!(history.len(), 1);
+        assert_eq!(unused, vec![second.clone()]);
+        history.push(image(&other), None, 3);
+        assert_eq!(history.len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn removing_returns_the_image_to_delete() {
         let mut history = history(vec![
             text("a"),
-            ClipKind::Image { path: "/tmp/x.png".into(), width: 2, height: 2 },
+            ClipKind::Image {
+                path: "/tmp/x.png".into(),
+                width: 2,
+                height: 2,
+            },
         ]);
         let image = history.entries[0].id;
-        assert_eq!(history.remove(image), Some(Some(PathBuf::from("/tmp/x.png"))));
+        assert_eq!(
+            history.remove(image),
+            Some(Some(PathBuf::from("/tmp/x.png")))
+        );
         assert_eq!(history.remove(image), None);
         assert_eq!(history.len(), 1);
     }
@@ -472,7 +543,10 @@ mod tests {
 
     #[test]
     fn formats_local_timestamps() {
-        assert_eq!(format_timestamp(1_790_631_000, 2 * 3600), "Sep 28, 2026 at 11:30 PM");
+        assert_eq!(
+            format_timestamp(1_790_631_000, 2 * 3600),
+            "Sep 28, 2026 at 11:30 PM"
+        );
         assert_eq!(format_timestamp(0, 0), "Jan 1, 1970 at 12:00 AM");
         assert_eq!(format_timestamp(951_782_400, 0), "Feb 29, 2000 at 12:00 AM");
     }
