@@ -7,7 +7,7 @@ use crate::{
     clipboard::{ClipKind, History},
     config::{Appearance, Config},
     geometry::{CardPlacement, PathStep, Point, Rect, Screen},
-    motion::{CARD_IN, CARD_MOVE, CARD_OUT, Curve, DOCK_IN, DOCK_OUT, Motion},
+    motion::{CARD_IN, CARD_MOVE, CARD_OUT, Curve, DOCK_IN, DOCK_OUT, Motion, WINDOW_IN},
     platform::{Accessibility, AppInfo, Copied, Platform, cache_dir},
     status_menu::LoginItem,
 };
@@ -23,10 +23,11 @@ use objc2_app_kit::{
     NSDeviceRGBColorSpace, NSEvent, NSGraphicsContext, NSPasteboard, NSPasteboardTypeFileURL,
     NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSScreen, NSView,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
+    NSApplicationActivationOptions, NSRunningApplication, NSWindow, NSWindowOrderingMode,
+    NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSURL,
+    NSArray, NSBundle, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSTimeZone, NSURL,
 };
 use objc2_quartz_core::{CAMediaTimingFunction, CAShapeLayer, CATransaction};
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
@@ -67,6 +68,43 @@ pub fn set_appearance(appearance: Appearance) {
     };
     let appearance = name.and_then(NSAppearance::appearanceNamed);
     NSApplication::sharedApplication(mtm()).setAppearance(appearance.as_deref());
+}
+
+// MARK: Activation
+
+/// The app the user was in, so focus can go back to it after the history
+/// window takes the keyboard.
+pub fn frontmost_app() -> Option<i32> {
+    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let pid = app.processIdentifier();
+    (pid != std::process::id() as i32).then_some(pid)
+}
+
+pub fn activate_app(pid: i32) {
+    if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+        app.activateWithOptions(NSApplicationActivationOptions::empty());
+    }
+}
+
+/// Fades a newly opened window in.
+pub fn fade_in(window: &NSWindow) {
+    window.setAlphaValue(0.0);
+    animate(WINDOW_IN, || window.animator().setAlphaValue(1.0));
+}
+
+/// Adds the system sidebar material behind a regular window's content.
+pub fn add_window_material(window: &NSWindow) {
+    let Some(content) = window.contentView() else {
+        return;
+    };
+    let view = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm()), content.bounds());
+    view.setMaterial(NSVisualEffectMaterial::Sidebar);
+    view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    view.setState(NSVisualEffectState::FollowsWindowActiveState);
+    view.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, None);
 }
 
 // MARK: Launch at login
@@ -151,6 +189,10 @@ impl Platform for MacPlatform {
             increase_contrast: workspace.accessibilityDisplayShouldIncreaseContrast(),
             reduce_motion: workspace.accessibilityDisplayShouldReduceMotion(),
         }
+    }
+
+    fn utc_offset(&self) -> i64 {
+        NSTimeZone::localTimeZone().secondsFromGMT() as i64
     }
 
     fn app_by_bundle_id(&self, bundle_id: &str) -> Option<AppInfo> {

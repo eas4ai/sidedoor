@@ -2,6 +2,7 @@
 //! launchers and live Weather, Clipboard and Stats widgets.
 
 mod clipboard;
+mod clipboard_window;
 mod config;
 mod dock;
 mod geometry;
@@ -19,17 +20,18 @@ mod ui_tests;
 
 use clipboard::History;
 use config::Config;
-use dock::{Dock, Services};
+use clipboard_window::{ClipboardWindow, ClipboardWindowEvent};
+use dock::{Dock, DockEvent, Services};
 use geometry::{CardPlacement, Rect};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, FontWeight, Refineable as _,
-    StyleRefinement, Styled as _, TextRun, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    StyleRefinement, Styled as _, TextRun, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowKind,
     WindowOptions, assets::icon_assets, base::Root, font, point, px, size, transparent_black,
 };
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow};
 use platform::Platform;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 use views::{CardChrome, CardView, DockView, OpenItem, RemoveItem, RevealItem};
 
 icon_assets!(
@@ -54,6 +56,9 @@ icon_assets!(
         File,
         FileText,
         AppWindow,
+        Image,
+        Search,
+        CircleX,
     ]
 );
 
@@ -269,6 +274,93 @@ fn open_panel<V: gpui_kit::Render>(
     })
 }
 
+/// The Clipboard History window, while it is open, and the app to hand
+/// focus back to when it closes.
+#[derive(Default)]
+struct HistoryWindow {
+    handle: Option<AnyWindowHandle>,
+    previous_app: Option<i32>,
+}
+
+fn open_clipboard_history(
+    dock: &Entity<Dock>,
+    state: &Rc<RefCell<HistoryWindow>>,
+    cx: &mut App,
+) -> Result<(), String> {
+    // Already open: bring it forward.
+    let existing = state.borrow().handle;
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        cx.activate(true);
+        return Ok(());
+    }
+
+    state.borrow_mut().previous_app = macos::frontmost_app();
+    cx.activate(true);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(780.0), px(500.0)),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Clipboard History".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(
+                px(18.0),
+                px(clipboard_window::TOOLBAR_HEIGHT / 2.0 - 7.0),
+            )),
+        }),
+        window_min_size: Some(size(px(620.0), px(380.0))),
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| ClipboardWindow::new(dock.clone(), window, cx))
+    })
+    .map_err(|err| err.to_string())?;
+    handle
+        .update(cx, |_, window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                root.style()
+                    .refine(&StyleRefinement::default().bg(transparent_black()));
+            });
+            if let Some(native) = macos::ns_window(window) {
+                macos::add_window_material(&native);
+                if !cx.reduce_motion() {
+                    macos::fade_in(&native);
+                }
+            }
+        })
+        .ok();
+
+    let state_for_events = state.clone();
+    cx.subscribe(&view, move |_, event, cx| match event {
+        ClipboardWindowEvent::Dismiss { .. } => {
+            let previous = {
+                let mut state = state_for_events.borrow_mut();
+                if let Some(handle) = state.handle.take() {
+                    handle
+                        .update(cx, |_, window, _| window.remove_window())
+                        .ok();
+                }
+                state.previous_app.take()
+            };
+            // Hand the keyboard back to the app the user came from, ready
+            // to paste.
+            if let Some(pid) = previous {
+                macos::activate_app(pid);
+            }
+        }
+    })
+    .detach();
+    state.borrow_mut().handle = Some(handle);
+    Ok(())
+}
+
 fn run(cx: &mut App) -> Result<(), String> {
     gpui_kit::init(cx);
     macos::set_accessory_policy();
@@ -309,6 +401,17 @@ fn run(cx: &mut App) -> Result<(), String> {
         |window, cx| cx.new(|cx| CardView::new(dock.clone(), chrome.clone(), window, cx)),
     )?;
     macos::hide_card(&card_panel.window, (0.0, 0.0));
+
+    let history_window = Rc::new(RefCell::new(HistoryWindow::default()));
+    let opener = dock.clone();
+    cx.subscribe(&dock, move |_, event, cx| match event {
+        DockEvent::OpenClipboardHistory => {
+            if let Err(err) = open_clipboard_history(&opener, &history_window, cx) {
+                eprintln!("sidekick: couldn't open Clipboard History: {err}");
+            }
+        }
+    })
+    .detach();
 
     let handler = dock.clone();
     cx.on_action(move |action: &RemoveItem, cx| {

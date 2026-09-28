@@ -35,6 +35,10 @@ pub struct Palette {
     pub surface: Hsla,
     /// Drop-target highlight.
     pub accent_fill: Hsla,
+    /// Selected segment of a segmented control.
+    pub segment: Hsla,
+    /// Text and glyphs on an accent-colored background.
+    pub on_accent: Hsla,
     pub blue: Hsla,
     pub green: Hsla,
     pub orange: Hsla,
@@ -77,6 +81,8 @@ impl Palette {
             fill: color(0x0000000d),
             surface: color(0xecececff),
             accent_fill: color(0x007aff33),
+            segment: color(0xffffffff),
+            on_accent: color(0xffffffff),
             blue: color(0x007affff),
             green: color(0x28cd41ff),
             orange: color(0xff9500ff),
@@ -97,6 +103,8 @@ impl Palette {
             fill: color(0xffffff14),
             surface: color(0x1e1e1eff),
             accent_fill: color(0x0a84ff40),
+            segment: color(0xffffff2e),
+            on_accent: color(0xffffffff),
             blue: color(0x0a84ffff),
             green: color(0x32d74bff),
             orange: color(0xff9f0aff),

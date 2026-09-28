@@ -196,6 +196,160 @@ impl History {
     }
 }
 
+// MARK: Browsing
+
+/// The type filter in the history window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    Text,
+    Links,
+    Images,
+    Files,
+}
+
+impl Filter {
+    pub const EVERY: [Filter; 5] = [
+        Filter::All,
+        Filter::Text,
+        Filter::Links,
+        Filter::Images,
+        Filter::Files,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Text => "Text",
+            Self::Links => "Links",
+            Self::Images => "Images",
+            Self::Files => "Files",
+        }
+    }
+
+    pub fn matches(self, kind: &ClipKind) -> bool {
+        matches!(
+            (self, kind),
+            (Self::All, _)
+                | (Self::Text, ClipKind::Text { .. })
+                | (Self::Links, ClipKind::Link { .. })
+                | (Self::Images, ClipKind::Image { .. })
+                | (Self::Files, ClipKind::File { .. })
+        )
+    }
+}
+
+impl ClipKind {
+    pub fn type_label(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "Text",
+            Self::Link { .. } => "Link",
+            Self::Image { .. } => "Image",
+            Self::File { .. } => "File",
+        }
+    }
+
+    /// Everything a search can match on.
+    fn searchable(&self) -> String {
+        match self {
+            Self::Text { text } => text.clone(),
+            Self::Link { url } => url.clone(),
+            Self::Image { width, height, .. } => format!("image {width}×{height} {width}x{height}"),
+            Self::File { path } => path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
+/// Entries matching `query` (case-insensitive, every word must appear) and
+/// `filter`, newest first.
+pub fn search<'a>(history: &'a History, query: &str, filter: Filter) -> Vec<&'a ClipEntry> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    history
+        .entries
+        .iter()
+        .filter(|entry| filter.matches(&entry.kind))
+        .filter(|entry| {
+            if words.is_empty() {
+                return true;
+            }
+            let mut haystack = entry.kind.searchable().to_lowercase();
+            if let Some(source) = &entry.source {
+                haystack.push(' ');
+                haystack.push_str(&source.to_lowercase());
+            }
+            words.iter().all(|word| haystack.contains(word.as_str()))
+        })
+        .collect()
+}
+
+impl History {
+    /// Removes one entry. Returns its image file, if it had one.
+    pub fn remove(&mut self, id: u64) -> Option<Option<PathBuf>> {
+        let index = self.entries.iter().position(|entry| entry.id == id)?;
+        let entry = self.entries.remove(index)?;
+        Some(match entry.kind {
+            ClipKind::Image { path, .. } => Some(path),
+            _ => None,
+        })
+    }
+}
+
+/// A day number in local time, for grouping.
+fn local_day(secs: u64, utc_offset: i64) -> i64 {
+    (secs as i64 + utc_offset).div_euclid(86_400)
+}
+
+/// "Today", "Yesterday" or "Earlier", as the history list groups entries.
+pub fn day_group(copied_at: u64, now: u64, utc_offset: i64) -> &'static str {
+    match local_day(now, utc_offset) - local_day(copied_at, utc_offset) {
+        ..=0 => "Today",
+        1 => "Yesterday",
+        _ => "Earlier",
+    }
+}
+
+/// "Sep 28, 2026 at 9:30 PM" in local time.
+pub fn format_timestamp(secs: u64, utc_offset: i64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let local = secs as i64 + utc_offset;
+    let (year, month, day) = civil_from_days(local.div_euclid(86_400));
+    let minutes = local.rem_euclid(86_400) / 60;
+    let (hour, minute) = (minutes / 60, minutes % 60);
+    let (hour12, meridiem) = match hour {
+        0 => (12, "AM"),
+        1..=11 => (hour, "AM"),
+        12 => (12, "PM"),
+        _ => (hour - 12, "PM"),
+    };
+    format!(
+        "{} {day}, {year} at {hour12}:{minute:02} {meridiem}",
+        MONTHS[(month - 1) as usize]
+    )
+}
+
+/// Proleptic Gregorian date for a count of days since 1970-01-01
+/// (Howard Hinnant's algorithm).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// Character and word counts for text previews.
+pub fn text_counts(text: &str) -> (usize, usize) {
+    (text.chars().count(), text.split_whitespace().count())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +418,68 @@ mod tests {
             Some("a".into())
         );
         assert_eq!(history.entries[0].copied_at, 9);
+    }
+
+    fn history(kinds: Vec<ClipKind>) -> History {
+        let mut history = History::default();
+        for (n, kind) in kinds.into_iter().enumerate() {
+            history.push(kind, Some("Notes".into()), n as u64);
+        }
+        history
+    }
+
+    #[test]
+    fn search_matches_every_word_and_the_filter() {
+        let history = history(vec![
+            text("Standup notes: shipped the tint picker"),
+            ClipKind::Link { url: "https://github.com/zed-industries/zed".into() },
+            text("Grocery list"),
+            ClipKind::File { path: "/Users/me/Project brief.pdf".into() },
+        ]);
+        let titles = |query: &str, filter| -> Vec<String> {
+            search(&history, query, filter).iter().map(|e| e.kind.title()).collect()
+        };
+        assert_eq!(titles("", Filter::All).len(), 4);
+        assert_eq!(titles("TINT standup", Filter::All), ["Standup notes: shipped the tint picker"]);
+        assert_eq!(titles("zed", Filter::Text), Vec::<String>::new());
+        assert_eq!(titles("", Filter::Links), ["https://github.com/zed-industries/zed"]);
+        assert_eq!(titles("brief", Filter::Files), ["Project brief.pdf"]);
+        // The source app is searchable too.
+        assert_eq!(titles("notes", Filter::All).len(), 4);
+    }
+
+    #[test]
+    fn removing_returns_the_image_to_delete() {
+        let mut history = history(vec![
+            text("a"),
+            ClipKind::Image { path: "/tmp/x.png".into(), width: 2, height: 2 },
+        ]);
+        let image = history.entries[0].id;
+        assert_eq!(history.remove(image), Some(Some(PathBuf::from("/tmp/x.png"))));
+        assert_eq!(history.remove(image), None);
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn groups_by_local_day() {
+        // 2026-09-28 21:30 UTC; in UTC+2 that's 23:30 on the 28th.
+        let now = 1_790_631_000;
+        let offset = 2 * 3600;
+        assert_eq!(day_group(now - 3600, now, offset), "Today");
+        assert_eq!(day_group(now - 86_400, now, offset), "Yesterday");
+        assert_eq!(day_group(now - 3 * 86_400, now, offset), "Earlier");
+    }
+
+    #[test]
+    fn formats_local_timestamps() {
+        assert_eq!(format_timestamp(1_790_631_000, 2 * 3600), "Sep 28, 2026 at 11:30 PM");
+        assert_eq!(format_timestamp(0, 0), "Jan 1, 1970 at 12:00 AM");
+        assert_eq!(format_timestamp(951_782_400, 0), "Feb 29, 2000 at 12:00 AM");
+    }
+
+    #[test]
+    fn counts_characters_and_words() {
+        assert_eq!(text_counts("Shipped the new tint picker."), (28, 5));
     }
 
     #[test]

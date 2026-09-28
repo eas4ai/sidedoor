@@ -1152,16 +1152,31 @@ fn clipboard_card(
             "Clear History"
         });
 
+    let show = dock_entity.clone();
+    let show_all = div()
+        .id("show-all-history")
+        .test_support()
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(5.0))
+        .text_color(palette.blue)
+        .hover(|style| style.bg(palette.fill))
+        .on_click(move |_, _, cx: &mut App| {
+            show.update(cx, |dock, cx| dock.show_clipboard_history(cx));
+        })
+        .child("Show All");
+
     card_body()
         .px(px(8.0))
         .gap(px(4.0))
         .child(div().px(px(6.0)).child(header))
         .child(div().flex().flex_col().children(rows))
-        .child(div().px(px(6.0)).mt_auto().child(footer(
-            "Click an item to copy it",
-            clear_button,
-            palette,
-        )))
+        .child(
+            div()
+                .px(px(6.0))
+                .mt_auto()
+                .child(footer(show_all, clear_button, palette)),
+        )
         .into_any_element()
 }
 

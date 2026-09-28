@@ -9,7 +9,7 @@ use crate::{
     stats::{Sampler, Snapshot},
     weather::{self, Weather},
 };
-use gpui_kit::{Context, SharedString, Task};
+use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use std::{
     collections::{HashSet, VecDeque},
     path::PathBuf,
@@ -73,6 +73,14 @@ impl DockItem {
         }
     }
 }
+
+/// Requests the dock makes of the app around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockEvent {
+    OpenClipboardHistory,
+}
+
+impl EventEmitter<DockEvent> for Dock {}
 
 pub enum WeatherState {
     Loading,
@@ -237,12 +245,13 @@ impl Dock {
     // MARK: Items
 
     pub fn activate(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(DockItem {
-            kind: ItemKind::App(app),
-            ..
-        }) = self.items.get(index)
-        else {
-            return;
+        let app = match self.items.get(index).map(|item| &item.kind) {
+            Some(ItemKind::App(app)) => app,
+            Some(ItemKind::Clipboard) => {
+                self.show_clipboard_history(cx);
+                return;
+            }
+            _ => return,
         };
         if let Err(err) = self.platform.open(&app.path) {
             eprintln!("sidekick: couldn't open {}: {err}", app.name);
@@ -336,6 +345,38 @@ impl Dock {
     }
 
     // MARK: Clipboard
+
+    pub fn show_clipboard_history(&mut self, cx: &mut Context<Self>) {
+        self.card = None;
+        self.pointer_on_item = None;
+        self.pointer_on_card = false;
+        cx.emit(DockEvent::OpenClipboardHistory);
+        cx.notify();
+    }
+
+    pub fn delete_entry(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(image) = self.history.remove(id) {
+            if let Some(file) = image {
+                std::fs::remove_file(file).ok();
+            }
+            self.save_history();
+            cx.notify();
+        }
+    }
+
+    pub fn utc_offset(&self) -> i64 {
+        self.platform.utc_offset()
+    }
+
+    pub fn reveal_path(&self, path: &std::path::Path) {
+        self.platform.reveal_in_finder(path);
+    }
+
+    pub fn open_path(&self, path: &std::path::Path) {
+        if let Err(err) = self.platform.open(path) {
+            eprintln!("sidekick: couldn't open {}: {err}", path.display());
+        }
+    }
 
     /// Puts a history entry back on the pasteboard and moves it to the top.
     pub fn copy_entry(&mut self, id: u64, cx: &mut Context<Self>) {

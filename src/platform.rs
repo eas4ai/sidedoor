@@ -44,6 +44,8 @@ pub trait Platform {
     fn pointer(&self) -> Point;
     fn running_bundle_ids(&self) -> HashSet<String>;
     fn accessibility(&self) -> Accessibility;
+    /// Seconds east of UTC for local dates.
+    fn utc_offset(&self) -> i64;
 
     fn app_by_bundle_id(&self, bundle_id: &str) -> Option<AppInfo>;
     /// The app bundle at `path`, e.g. one dropped from Finder.
@@ -132,6 +134,9 @@ pub mod fake {
         }
         fn accessibility(&self) -> Accessibility {
             Accessibility::default()
+        }
+        fn utc_offset(&self) -> i64 {
+            0
         }
         fn app_by_bundle_id(&self, bundle_id: &str) -> Option<AppInfo> {
             self.apps

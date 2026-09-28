@@ -38,6 +38,9 @@ pub const CARD_MOVE: Motion = motion(220, 0.25, 1.05, 0.3, 1.0);
 /// A card leaving.
 pub const CARD_OUT: Motion = motion(140, 0.4, 0.0, 1.0, 1.0);
 
+/// A window fading in.
+pub const WINDOW_IN: Motion = motion(180, 0.25, 0.1, 0.25, 1.0);
+
 /// How far a card travels toward its final spot as it appears.
 pub const CARD_TRAVEL: f64 = 10.0;
 /// How far a dock icon travels in from the edge as the dock appears.
