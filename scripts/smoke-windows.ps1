@@ -58,7 +58,8 @@ try {
         Start-Sleep -Milliseconds 250
         $Process.Refresh()
         if ($Process.HasExited) { throw "Sidedoor exited during startup: $(Get-Content "$Log/stderr.log" -Raw)" }
-        $MessageWindows = [SidedoorSmoke]::Windows($Process.Id, $null, "SidedoorMessages")
+        # PowerShell converts $null to "" for .NET string parameters.
+        $MessageWindows = [SidedoorSmoke]::Windows($Process.Id, [NullString]::Value, "SidedoorMessages")
     } while ($MessageWindows.Count -lt 2 -and (Get-Date) -lt $Deadline)
     if ($MessageWindows.Count -lt 2) { throw "Tray and shortcut message windows were not created" }
 
@@ -74,7 +75,7 @@ try {
     $Deadline = (Get-Date).AddSeconds(15)
     do {
         Start-Sleep -Milliseconds 250
-        $History = [SidedoorSmoke]::Windows($Process.Id, "Clipboard History", $null)
+        $History = [SidedoorSmoke]::Windows($Process.Id, "Clipboard History", [NullString]::Value)
     } while ($History.Count -eq 0 -and (Get-Date) -lt $Deadline)
     if ($History.Count -eq 0) { throw "Clipboard History did not open from its shortcut" }
     Start-Sleep -Seconds 1
@@ -93,7 +94,7 @@ try {
     [SidedoorSmoke]::SetCursorPos($Screen.Right - 1, $Screen.Height / 2) | Out-Null
     Start-Sleep -Seconds 1
     $Dock = $null
-    foreach ($Window in [SidedoorSmoke]::Windows($Process.Id, "", $null)) {
+    foreach ($Window in [SidedoorSmoke]::Windows($Process.Id, "", [NullString]::Value)) {
         if (-not [SidedoorSmoke]::IsWindowVisible($Window)) { continue }
         [SidedoorSmoke]::GetWindowRect($Window, [ref]$Bounds) | Out-Null
         $Width = $Bounds.Right - $Bounds.Left
@@ -116,7 +117,21 @@ try {
         throw "Launching again created a second app instance"
     }
     if ($Second.ExitCode -ne 0) { throw "Second launch failed" }
-    Write-Host "Packaged app started, bundled Bun started, and Clipboard History opened and closed."
+    $Deadline = (Get-Date).AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 250
+        $Settings = [SidedoorSmoke]::Windows($Process.Id, "General", [NullString]::Value)
+    } while ($Settings.Count -eq 0 -and (Get-Date) -lt $Deadline)
+    if ($Settings.Count -eq 0) { throw "Second launch did not open existing app settings" }
+    Start-Sleep -Seconds 1
+    [SidedoorSmoke]::GetWindowRect($Settings[0], [ref]$Bounds) | Out-Null
+    Save-Screen "settings" ([System.Drawing.Rectangle]::FromLTRB($Bounds.Left, $Bounds.Top, $Bounds.Right, $Bounds.Bottom))
+    Write-Host "Packaged app and bundled Bun started; History opened and closed; repeat launch opened Settings."
+} catch {
+    try {
+        Save-Screen "failure" ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds)
+    } catch { Write-Warning "Could not capture failure screenshot: $_" }
+    throw
 } finally {
     # Stop only this smoke test's process tree, including its bundled Bun child.
     if (-not $Process.HasExited) { & taskkill.exe /PID $Process.Id /T /F | Out-Null }
