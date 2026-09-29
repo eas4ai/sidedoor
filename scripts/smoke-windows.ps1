@@ -23,6 +23,19 @@ public static class SidedoorSmoke {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Bounds bounds);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    public static void OpenHistory() {
+        // This script runs only on an isolated Windows CI desktop.
+        // Real key events also exercise RegisterHotKey and foreground permission.
+        keybd_event(0x11, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, 2, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        keybd_event(0x11, 0, 2, UIntPtr.Zero);
+    }
     public static IntPtr[] Windows(uint pid, string title, string className) {
         var matches = new List<IntPtr>();
         EnumWindows((window, _) => {
@@ -68,10 +81,8 @@ try {
         Start-Sleep -Milliseconds 650
     }
 
-    # Exercise the same callback used by RegisterHotKey, without sending keys to other apps.
-    foreach ($Window in $MessageWindows) {
-        [SidedoorSmoke]::PostMessage($Window, 0x0312, [UIntPtr]::new(1), [IntPtr]::Zero) | Out-Null
-    }
+    $Previous = [SidedoorSmoke]::GetForegroundWindow()
+    [SidedoorSmoke]::OpenHistory()
     $Deadline = (Get-Date).AddSeconds(15)
     do {
         Start-Sleep -Milliseconds 250
@@ -79,6 +90,9 @@ try {
     } while ($History.Count -eq 0 -and (Get-Date) -lt $Deadline)
     if ($History.Count -eq 0) { throw "Clipboard History did not open from its shortcut" }
     Start-Sleep -Seconds 1
+    if ([SidedoorSmoke]::GetForegroundWindow() -ne $History[0]) {
+        throw "Clipboard History did not receive keyboard focus from its shortcut"
+    }
     $Bounds = New-Object SidedoorSmoke+Bounds
     [SidedoorSmoke]::GetWindowRect($History[0], [ref]$Bounds) | Out-Null
     Save-Screen "history" ([System.Drawing.Rectangle]::FromLTRB($Bounds.Left, $Bounds.Top, $Bounds.Right, $Bounds.Bottom))
@@ -90,6 +104,11 @@ try {
     Start-Sleep -Seconds 1
     $Process.Refresh()
     if ($Process.HasExited) { throw "Closing History terminated Sidedoor" }
+    if ([SidedoorSmoke]::GetForegroundWindow() -ne $Previous) {
+        throw "Closing History did not restore the previous window's focus"
+    }
+    # Keep the runner console from covering later UI captures.
+    [SidedoorSmoke]::ShowWindow($Previous, 6) | Out-Null
     $Screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     [SidedoorSmoke]::SetCursorPos($Screen.Right - 1, $Screen.Height / 2) | Out-Null
     Start-Sleep -Seconds 1
@@ -111,6 +130,8 @@ try {
         Start-Sleep -Seconds 2
         Save-Screen $Widget[0] $Screen
     }
+    [SidedoorSmoke]::SetCursorPos(10, 10) | Out-Null
+    Start-Sleep -Seconds 1
     $Second = Start-Process "$App/Sidedoor.exe" -PassThru
     if (-not $Second.WaitForExit(10000)) {
         Stop-Process -Id $Second.Id -Force
