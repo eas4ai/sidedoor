@@ -199,6 +199,9 @@ pub struct Dock {
     clear_armed: Option<Task<()>>,
     screen: Screen,
     reveal: Reveal,
+    /// A context menu is open; the dock stays as it is until it closes,
+    /// as it does while a macOS menu tracks the pointer.
+    menu_open: bool,
     pasteboard_count: isize,
     sampler: Option<Sampler>,
     /// Whether this dock follows the real pointer (off in tests, which drive
@@ -298,6 +301,7 @@ impl Dock {
             close_card: None,
             clear_armed: None,
             screen,
+            menu_open: false,
             reveal: Reveal::default(),
             live: services.live,
             weather_task,
@@ -1414,7 +1418,15 @@ impl Dock {
 
     // MARK: Polling
 
+    /// Holds the dock in place while a context menu is open.
+    pub fn set_menu_open(&mut self, open: bool) {
+        self.menu_open = open;
+    }
+
     pub(crate) fn poll_pointer(&mut self, cx: &mut Context<Self>) {
+        if self.menu_open {
+            return;
+        }
         if let Some(screen) = self.platform.main_screen()
             && screen != self.screen
         {

@@ -66,6 +66,8 @@ pub(super) fn dock_page(
                 Some(
                     if cfg!(windows) {
                         "Automatic follows Windows."
+                    } else if cfg!(target_os = "linux") {
+                        "Automatic follows the system."
                     } else {
                         "Automatic follows macOS."
                     }

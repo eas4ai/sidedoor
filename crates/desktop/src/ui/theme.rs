@@ -1,7 +1,53 @@
 //! AppKit semantic colors and text sizes, so the UI reads as native macOS.
 
 use crate::app::host::Accessibility;
-use gpui_kit::{App, Hsla, Window, WindowAppearance, component::Theme, rgba};
+use gpui_kit::{App, Hsla, SharedString, Window, WindowAppearance, component::Theme, rgba};
+
+/// Linux has no San Francisco; Inter is the closest open match in metrics
+/// and shapes, so text sets as it does on a Mac wherever it is installed.
+#[cfg(target_os = "linux")]
+const PREFERRED_FONT: &str = "Inter";
+
+/// Names the interface typeface on GPUI Kit's theme. Call once at startup,
+/// after `gpui_kit::init`; `sync_kit_theme` keeps it through theme changes.
+pub fn install_ui_font(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    {
+        let installed = cx
+            .text_system()
+            .all_font_names()
+            .iter()
+            .any(|name| name == PREFERRED_FONT);
+        if installed {
+            UI_FONT.with(|font| *font.borrow_mut() = Some(PREFERRED_FONT.into()));
+        } else {
+            eprintln!("sidedoor: install the Inter font (fonts-inter) for text that matches macOS");
+        }
+    }
+    apply_ui_font(cx);
+}
+
+thread_local! {
+    static UI_FONT: std::cell::RefCell<Option<SharedString>> = const { std::cell::RefCell::new(None) };
+}
+
+fn apply_ui_font(cx: &mut App) {
+    let Some(font) = UI_FONT.with(|font| font.borrow().clone()) else {
+        return;
+    };
+    if cx.has_global::<Theme>() && Theme::global(cx).font_family != font {
+        Theme::update(cx, |theme| theme.font_family = font);
+    }
+}
+
+/// The family text is drawn in, for measuring it outside an element.
+pub fn ui_font(cx: &App) -> SharedString {
+    if cx.has_global::<Theme>() {
+        Theme::global(cx).font_family.clone()
+    } else {
+        ".SystemUIFont".into()
+    }
+}
 
 /// macOS text styles (points).
 pub mod text {
@@ -13,7 +59,7 @@ pub mod text {
     pub const DISPLAY: f32 = 28.0;
 }
 
-fn is_dark(window: &Window) -> bool {
+pub(crate) fn is_dark(window: &Window) -> bool {
     matches!(
         ::platform::native::appearance(window),
         WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -34,6 +80,7 @@ pub fn sync_kit_theme(window: &mut Window, cx: &mut App) {
         Palette::light()
     }
     .blue;
+    apply_ui_font(cx);
     if Theme::global(cx).caret == caret {
         return;
     }
@@ -42,6 +89,15 @@ pub fn sync_kit_theme(window: &mut Window, cx: &mut App) {
         // `selectedTextBackgroundColor`
         theme.colors.selection = color(if dark { 0x3f638bff } else { 0xb3d7ffff });
     });
+}
+
+/// The opaque surface of a window, painted by a drawn window frame.
+pub fn window_surface(window: &Window) -> Hsla {
+    if is_dark(window) {
+        Palette::dark().surface
+    } else {
+        Palette::light().surface
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -100,7 +156,10 @@ impl Palette {
             palette.stroke = palette.label.opacity(0.55);
             palette.separator = palette.label.opacity(0.35);
         }
-        if accessibility.reduce_transparency || !::platform::native::has_material() {
+        if crate::ui::chrome::is_drawn(window) {
+            // The drawn window frame paints the surface, with its corners.
+            palette.surface = color(0x00000000);
+        } else if accessibility.reduce_transparency || !::platform::native::has_material() {
             palette.group = if dark {
                 color(0x2a2a2aff)
             } else {

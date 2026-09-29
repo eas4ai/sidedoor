@@ -15,7 +15,7 @@ SDK remains its own Bun package at the repository root.
 | --- | --- |
 | `desktop` | Startup, app state, shared GPUI views, built-in TSX plugins, icons |
 | `domain` | Pure models, config schema and migrations, clipboard rules, geometry, motion |
-| `platform` | macOS/Windows APIs, native windows, clipboard, shortcuts, tray, paths |
+| `platform` | macOS/Windows/Linux APIs, native windows, clipboard, shortcuts, tray, paths |
 | `services` | Config/history persistence, weather requests, system sampling, image downloads |
 | `plugin-host` | Plugin manifests, protocol, discovery, installs from links, reload, Bun supervisor, SDK setup |
 
@@ -25,6 +25,32 @@ See [architecture](docs/architecture.md) for dependency boundaries and source la
 
 Run `cargo run`, or build and install the app with
 `./scripts/package/macos.sh --install`. Bundles include Bun for the plugin runtime.
+
+## Linux
+
+Sidedoor runs on X11 desktops, and on Wayland sessions through XWayland
+(it switches to X11 itself, since Wayland doesn't let an app follow the
+pointer or place a dock). It looks the same as on macOS: the views are
+shared, text uses [Inter](https://rsms.me/inter/) when it is installed, and
+windows draw a macOS-style frame with traffic lights, rounded corners and a
+shadow. That frame needs a compositing window manager that supports
+`_GTK_FRAME_EXTENTS` (GNOME, KDE Plasma, Xfce); otherwise the window
+manager's own frame is used.
+
+Install the build libraries and Inter, then run `cargo run`:
+
+```sh
+sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+  libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev fonts-inter
+```
+
+`./scripts/package/linux.sh` builds a portable folder and tarball with Bun,
+the SDK and the built-in plugins; `--install` also installs it for the
+current user (`~/.local/opt/sidedoor`, a launcher entry and an icon) and
+starts it. Settings are under `~/.local/share/sidedoor`. The tray icon
+(Settings, Launch at Login, Reload, Quit) appears where the desktop shows
+StatusNotifierItems; the dock's context menu always has **Dock Settings…**.
+**Ctrl+Alt+V** opens Clipboard History in a new setup.
 
 ## Windows test builds
 

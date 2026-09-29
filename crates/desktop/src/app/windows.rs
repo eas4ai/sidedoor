@@ -214,6 +214,7 @@ pub(super) fn tooltip_text(item: &dock::DockItem) -> Option<String> {
 
 /// Width of a tooltip label as the card window will draw it.
 pub(super) fn measure(panel: &Panel, label: &str, cx: &mut App) -> f64 {
+    let family = crate::ui::theme::ui_font(cx);
     panel
         .handle
         .update(cx, |_, window, _| {
@@ -221,11 +222,7 @@ pub(super) fn measure(panel: &Panel, label: &str, cx: &mut App) -> f64 {
                 len: label.len(),
                 font: gpui_kit::Font {
                     weight: FontWeight::NORMAL,
-                    ..font(if cfg!(windows) {
-                        "Segoe UI"
-                    } else {
-                        ".SystemUIFont"
-                    })
+                    ..font(family)
                 },
                 color: gpui_kit::black(),
                 background_color: None,
@@ -318,7 +315,7 @@ pub(super) fn open_clipboard_history(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
         cx.new(|cx| ClipboardWindow::new(dock.clone(), window, cx))
     })
     .map_err(|err| err.to_string())?;
@@ -334,8 +331,8 @@ pub(super) fn open_clipboard_history(
                     native::fade_in(&native);
                 }
             }
-            // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            // GPUI's application-level activation is a no-op on Windows and X11.
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();
@@ -430,7 +427,7 @@ pub(super) fn open_plugin_window(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
         cx.new(|cx| {
             plugin_window::PluginWindow::new(
                 dock.clone(),
@@ -455,8 +452,8 @@ pub(super) fn open_plugin_window(
                     native::fade_in(&native);
                 }
             }
-            // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            // GPUI's application-level activation is a no-op on Windows and X11.
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();
@@ -520,7 +517,7 @@ pub(super) fn open_settings(
         ..Default::default()
     };
     let lookup: settings_window::PlaceLookup = std::sync::Arc::new(weather::search);
-    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
         cx.new(|cx| SettingsWindow::new(dock.clone(), lookup, window, cx))
     })
     .map_err(|err| err.to_string())?;
@@ -536,8 +533,8 @@ pub(super) fn open_settings(
                     native::fade_in(&native);
                 }
             }
-            // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            // GPUI's application-level activation is a no-op on Windows and X11.
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();

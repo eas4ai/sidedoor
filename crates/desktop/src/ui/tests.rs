@@ -434,7 +434,7 @@ impl HistoryHarness {
     }
 
     fn press(&self, cx: &mut TestAppContext, key: &str) {
-        let key = if cfg!(windows) {
+        let key = if domain::shortcut::PC_KEYS {
             key.replace("cmd-", "ctrl-")
         } else {
             key.to_owned()
@@ -864,7 +864,7 @@ impl SettingsHarness {
     }
 
     fn press(&self, cx: &mut TestAppContext, key: &str) {
-        let key = if cfg!(windows) {
+        let key = if domain::shortcut::PC_KEYS {
             key.replace("cmd-", "ctrl-")
         } else {
             key.to_owned()

@@ -1,0 +1,45 @@
+name: Linux
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev
+      - name: Rust toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: SDK dependencies for UI tests
+        working-directory: sdk
+        run: bun install --frozen-lockfile
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Rust tests
+        run: cargo test --workspace --locked
+      - name: Clippy
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Package
+        run: ./scripts/package/linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sidedoor-linux-x86_64
+          path: target/release/bundle/Sidedoor-linux-x86_64.tar.gz

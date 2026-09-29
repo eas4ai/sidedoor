@@ -106,7 +106,7 @@ pub(super) fn open_shortcut_recorder(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
         cx.new(|cx| ShortcutRecorder::new(title, icon, glyph, current, check, window, cx))
     })
     .map_err(|err| err.to_string())?;
@@ -123,7 +123,7 @@ pub(super) fn open_shortcut_recorder(
                 }
             }
             // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();

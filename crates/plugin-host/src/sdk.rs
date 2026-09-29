@@ -168,7 +168,13 @@ pub fn find_bun() -> Option<PathBuf> {
         return Some(bundled);
     }
     #[cfg(not(target_os = "windows"))]
-    let from_shell = Command::new("/bin/zsh")
+    let shell = if cfg!(target_os = "macos") {
+        "/bin/zsh".to_string()
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+    };
+    #[cfg(not(target_os = "windows"))]
+    let from_shell = Command::new(shell)
         .args(["-lc", "command -v bun"])
         .stderr(Stdio::null())
         .output()

@@ -71,11 +71,11 @@ impl Default for WeatherLocation {
     }
 }
 
-/// Clipboard History from anywhere; ⌃⌘V is rarely taken.
+/// Clipboard History from anywhere; ⌃⌘V (Ctrl+Alt+V on a PC) is rarely taken.
 fn default_shortcuts() -> BTreeMap<String, String> {
     BTreeMap::from([(
         "plugin:builtin.clipboard".into(),
-        if cfg!(windows) {
+        if crate::shortcut::PC_KEYS {
             "ctrl-alt-v"
         } else {
             "ctrl-cmd-v"
@@ -85,7 +85,7 @@ fn default_shortcuts() -> BTreeMap<String, String> {
 }
 
 /// Apps offered in a fresh dock, in order; only installed ones are kept.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 const DEFAULT_APPS: &[&str] = &[
     "com.apple.finder",
     "com.apple.Safari",
@@ -95,6 +95,27 @@ const DEFAULT_APPS: &[&str] = &[
     "com.apple.Terminal",
     "com.apple.Notes",
     "com.apple.Music",
+];
+
+/// Desktop file IDs: file managers, browsers, terminals and editors.
+#[cfg(target_os = "linux")]
+const DEFAULT_APPS: &[&str] = &[
+    "org.gnome.Nautilus",
+    "org.kde.dolphin",
+    "thunar",
+    "firefox",
+    "org.mozilla.firefox",
+    "firefox_firefox",
+    "google-chrome",
+    "chromium",
+    "brave-browser",
+    "com.mitchellh.ghostty",
+    "org.gnome.Ptyxis",
+    "org.gnome.Console",
+    "org.gnome.Terminal",
+    "org.kde.konsole",
+    "code",
+    "org.gnome.TextEditor",
 ];
 
 #[cfg(target_os = "windows")]

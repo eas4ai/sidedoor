@@ -1,6 +1,8 @@
-//! Shared desktop UI, used on macOS and Windows.
+//! Shared desktop UI, used on macOS, Windows and Linux.
+pub(crate) mod chrome;
 pub(crate) mod clipboard;
 pub(crate) mod dock;
+pub(crate) mod menu;
 pub(crate) mod plugins;
 pub(crate) mod remote_image;
 pub(crate) mod settings;

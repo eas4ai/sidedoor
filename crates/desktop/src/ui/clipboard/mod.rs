@@ -4,6 +4,7 @@
 use crate::app::dock::Dock;
 use crate::ui::theme::{Palette, text};
 use domain::clipboard::{self, ClipEntry, ClipKind, Filter};
+use domain::shortcut::PC_KEYS;
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, EventEmitter, FontWeight,
     Hsla, InteractiveElement as _, IntoElement, Keystroke, ObjectFit, ParentElement as _, Render,
@@ -188,14 +189,14 @@ impl ClipboardWindow {
         let modifiers = key.modifiers;
         let other = modifiers.shift
             || modifiers.alt
-            || if cfg!(windows) {
+            || if PC_KEYS {
                 modifiers.platform
             } else {
                 modifiers.control
             };
         match (
             key.key.as_str(),
-            if cfg!(windows) {
+            if PC_KEYS {
                 modifiers.control
             } else {
                 modifiers.platform
@@ -288,7 +289,7 @@ impl Render for ClipboardWindow {
             .gap(px(DETAIL_GAP))
             .children(selected.map(|entry| {
                 let rows = information_rows(entry, offset);
-                let image_box = image_box(window.viewport_size(), rows.len());
+                let image_box = image_box(crate::ui::chrome::content_size(window), rows.len());
                 div()
                     .flex_1()
                     .min_h_0()
@@ -523,11 +524,7 @@ fn footer(
                 .child(action(
                     "delete-entry",
                     "Delete",
-                    if cfg!(windows) {
-                        "Ctrl+Backspace"
-                    } else {
-                        "⌘⌫"
-                    },
+                    if PC_KEYS { "Ctrl+Backspace" } else { "⌘⌫" },
                     ClipboardWindow::delete_selected,
                 )),
         )

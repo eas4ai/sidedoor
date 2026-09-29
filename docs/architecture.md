@@ -18,15 +18,15 @@ and build automation. Application sources and assets belong to crates.
 │   │       ├── ui/               # Dock, clipboard, settings, plugins, shared theme
 │   │       └── builtins/         # Weather, Stats and Clipboard TSX plugins
 │   ├── domain/src/               # Pure models and state transitions
-│   ├── platform/src/             # Native API contract, paths, macos/ and windows/
+│   ├── platform/src/             # Native API contract, paths, macos/, windows/ and linux/
 │   ├── services/src/             # Persistence, weather, stats and image IO
 │   └── plugin-host/src/          # Manifest, protocol, discovery, installs from links, runtime, reload and SDK
 ├── sdk/                          # Independent Bun/TypeScript package
 ├── scripts/
-│   ├── package/                  # macos.sh and windows.ps1
+│   ├── package/                  # macos.sh, windows.ps1 and linux.sh
 │   └── smoke/                    # windows.ps1
 ├── docs/
-└── .github/workflows/            # macOS, Windows and SDK checks
+└── .github/workflows/            # macOS, Windows, Linux and SDK checks
 ```
 
 ## Dependency rules
@@ -49,6 +49,9 @@ graph TD
 - `platform` provides native operations and presentation through one contract. Its
   GPUI dependency bridges native window handles. It does not depend on services
   or the plugin host.
+- On Linux, `platform` keeps its own X11 connection. A foreground task in
+  `desktop` calls `native::pump` to advance window animations and deliver
+  shortcuts and tray commands, since X11 has no run loop to attach them to.
 - `services` owns fetching and persistence; `plugin-host` owns plugin processes
   and protocol messages. Neither imports desktop views.
 - `desktop::app::host` composes native operations, storage, and plugin startup.

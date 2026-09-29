@@ -7,6 +7,7 @@ use crate::ui::dock::{self as views, AssignShortcut, OpenConfigFile};
 use crate::ui::theme::{Palette, text};
 use domain::config::{Appearance, MAX_ITEMS, WeatherLocation};
 use domain::geometry::Edge;
+use domain::shortcut::PC_KEYS;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, App, AppContext as _, Context, Div, ElementId,
     Entity, EventEmitter, FocusHandle, FontWeight, Hsla, InteractiveElement as _, IntoElement,
@@ -151,12 +152,12 @@ impl SettingsWindow {
                 }
                 let keystroke = &event.keystroke;
                 let modifiers = keystroke.modifiers;
-                let primary = if cfg!(windows) {
+                let primary = if PC_KEYS {
                     modifiers.control
                 } else {
                     modifiers.platform
                 };
-                let other = if cfg!(windows) {
+                let other = if PC_KEYS {
                     modifiers.platform
                 } else {
                     modifiers.control

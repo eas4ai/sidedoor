@@ -277,6 +277,8 @@ impl Render for ShortcutRecorder {
                 .child("Press Return to save it."),
             (None, None) => div().text_color(palette.secondary).child(if cfg!(windows) {
                 "Use Ctrl, Alt or Win with any key, or an F-key on its own."
+            } else if cfg!(target_os = "linux") {
+                "Use Ctrl, Alt or Super with any key, or an F-key on its own."
             } else {
                 "Use ⌘, ⌥ or ⌃ with any key, or an F-key on its own."
             }),

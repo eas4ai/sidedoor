@@ -14,10 +14,18 @@ use std::{
 
 pub const REVEAL_LABEL: &str = if cfg!(windows) {
     "Show in File Explorer"
+} else if cfg!(target_os = "linux") {
+    "Show in Files"
 } else {
     "Show in Finder"
 };
-pub const COMPUTER_NAME: &str = if cfg!(windows) { "PC" } else { "Mac" };
+pub const COMPUTER_NAME: &str = if cfg!(windows) {
+    "PC"
+} else if cfg!(target_os = "linux") {
+    "computer"
+} else {
+    "Mac"
+};
 
 /// An installed app, as shown in the dock.
 #[derive(Clone, Debug, PartialEq)]
@@ -52,7 +60,7 @@ pub enum LoginItem {
     #[default]
     Off,
     /// Registered, but the user must allow it in System Settings.
-    #[cfg_attr(target_os = "windows", allow(dead_code))] // macOS login-item approval state
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // macOS login-item approval state
     NeedsApproval,
     /// Only an app bundle can be a login item.
     Unavailable,
