@@ -1447,7 +1447,9 @@ impl Dock {
         self.card_frame = frame;
     }
 
-    /// Holds the dock in place while a context menu is open.
+    /// Holds the dock in place while a context menu is open. Only the drawn
+    /// Linux menu needs it; system menus pause the dock's timers themselves.
+    #[cfg(target_os = "linux")]
     pub fn set_menu_open(&mut self, open: bool) {
         self.menu_open = open;
     }
