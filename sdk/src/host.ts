@@ -1,43 +1,78 @@
-// The bridge to the app. The host runs each plugin as its own Bun process
-// and speaks JSON lines: rendered surfaces go out on stdout, events come in
-// on stdin. Plugin logging goes to stderr so it never mixes with the protocol.
+// The bridge to the app. Inside the app every plugin runs in its own Worker
+// thread of one Bun process (see `supervisor.ts`), and talks to it with
+// messages: rendered surfaces and patches out, events and settings in.
 
 import {
+  diff,
   dispatch,
   invalidate,
   renderSurfaces,
   runEffects,
   setInvalidateHandler,
+  type Patch,
 } from "./runtime";
 import type { Component, Node } from "./types";
 
-/** Messages the host sends. */
-export type HostMessage = { type: "event"; handler: string; value?: unknown };
+/** Messages the app sends a plugin. */
+export type HostMessage =
+  | { type: "event"; handler: string; value?: unknown }
+  | { type: "card"; open: boolean }
+  | { type: "settings"; values: Record<string, unknown> }
+  /** The app lost track of a surface; send everything again. */
+  | { type: "resync" };
 
-/** Messages a plugin sends. */
+/** Messages a plugin sends the app. */
 export type PluginMessage =
   | { type: "render"; surface: string; tree: Node[] }
+  | { type: "patch"; surface: string; patches: Patch[] }
   | { type: "open_url"; url: string }
   | { type: "open_path"; path: string }
   | { type: "copy"; text: string }
+  | { type: "log"; line: string }
   | { type: "error"; message: string };
 
-// Bun's globals, typed here so plugins typecheck without `@types/bun`.
-interface Runtime {
-  process: {
-    env: Record<string, string | undefined>;
-    stdout: { write(text: string): void };
-    stderr: { write(text: string): void };
-    exit(code: number): never;
-  };
+// The worker's globals, typed here so plugins typecheck without `@types/bun`.
+interface WorkerScope {
+  process: { env: Record<string, string | undefined> };
   Bun: { inspect(value: unknown): string };
+  postMessage(message: unknown): void;
+  addEventListener(type: "message", listener: (event: { data: HostMessage }) => void): void;
 }
-const { process, Bun } = globalThis as unknown as Runtime;
-/** Bun reads stdin line by line by iterating `console`. */
-const stdinLines = console as unknown as AsyncIterable<string>;
+const scope = globalThis as unknown as WorkerScope;
+const env = scope.process?.env ?? {};
+
+const state = {
+  cardOpen: false,
+  settings: parseSettings(env.SIDEKICK_SETTINGS),
+};
+
+function parseSettings(json: string | undefined): Record<string, unknown> {
+  try {
+    return json ? JSON.parse(json) : {};
+  } catch {
+    return {};
+  }
+}
 
 function send(message: PluginMessage) {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
+  scope.postMessage(message);
+}
+
+function describe(error: unknown) {
+  return error instanceof Error ? (error.stack ?? error.message) : String(error);
+}
+
+/** Whether the widget's card is showing. Read it during render. */
+export function useCardOpen(): boolean {
+  return state.cardOpen;
+}
+
+/**
+ * A value from the plugin's settings, as declared under `sidekick.settings`
+ * in its `package.json` and edited in Settings › Plugins.
+ */
+export function useSetting<T = unknown>(key: string): T {
+  return state.settings[key] as T;
 }
 
 /** Things a widget can ask the app to do. */
@@ -46,7 +81,9 @@ export const sidekick = {
   open: (path: string) => send({ type: "open_path", path }),
   copy: (text: string) => send({ type: "copy", text }),
   /** A folder the plugin can keep files in. */
-  dataDir: process.env.SIDEKICK_DATA_DIR ?? "",
+  dataDir: env.SIDEKICK_DATA_DIR ?? "",
+  /** The plugin's settings right now. */
+  settings: () => ({ ...state.settings }),
 };
 
 export interface WidgetDefinition {
@@ -59,59 +96,69 @@ export interface WidgetDefinition {
 
 /** Declares the widget and, inside the app, starts talking to it. */
 export function widget(definition: WidgetDefinition): WidgetDefinition {
-  if (process.env.SIDEKICK_PLUGIN === "1") start(definition);
+  if (env.SIDEKICK_PLUGIN === "1") start(definition);
   return definition;
 }
 
 function start(definition: WidgetDefinition) {
-  // Keep stdout for the protocol.
+  // Logs go to the app, which shows them in Settings › Plugins.
   const log = (...args: unknown[]) =>
-    process.stderr.write(`${args.map((arg) => (typeof arg === "string" ? arg : Bun.inspect(arg))).join(" ")}\n`);
+    send({
+      type: "log",
+      line: args.map((arg) => (typeof arg === "string" ? arg : scope.Bun.inspect(arg))).join(" "),
+    });
   console.log = log;
   console.info = log;
   console.debug = log;
+  console.warn = log;
+  console.error = log;
 
   const surfaces: Record<string, Component> = { card: definition.card };
   if (definition.tile) surfaces.tile = definition.tile;
-  const sent = new Map<string, string>();
+  let sent = new Map<string, Node[]>();
 
   const render = () => {
     try {
       const output = renderSurfaces(surfaces);
       for (const [surface, tree] of Object.entries(output)) {
-        const json = JSON.stringify(tree);
-        if (sent.get(surface) === json) continue;
-        sent.set(surface, json);
-        send({ type: "render", surface, tree });
+        const previous = sent.get(surface);
+        sent.set(surface, tree);
+        const patches = previous ? diff(previous, tree) : null;
+        if (patches === null) {
+          send({ type: "render", surface, tree });
+        } else if (patches.length > 0) {
+          send({ type: "patch", surface, patches });
+        }
       }
       runEffects();
     } catch (error) {
-      send({ type: "error", message: error instanceof Error ? error.stack ?? error.message : String(error) });
+      send({ type: "error", message: describe(error) });
     }
   };
   setInvalidateHandler(render);
   render();
 
-  (async () => {
-    for await (const line of stdinLines) {
-      if (!line.trim()) continue;
-      let message: HostMessage;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (message.type === "event") {
+  scope.addEventListener("message", ({ data: message }) => {
+    switch (message.type) {
+      case "event":
         try {
           dispatch(message.handler, message.value);
         } catch (error) {
-          send({ type: "error", message: error instanceof Error ? error.stack ?? error.message : String(error) });
+          send({ type: "error", message: describe(error) });
         }
-      }
-      // Handlers usually change state; re-render in case they changed
-      // something outside a hook.
-      invalidate();
+        break;
+      case "card":
+        state.cardOpen = message.open;
+        break;
+      case "settings":
+        state.settings = message.values;
+        break;
+      case "resync":
+        sent = new Map();
+        break;
     }
-    process.exit(0);
-  })();
+    // Handlers usually change state; re-render in case they changed
+    // something outside a hook. Unchanged surfaces send nothing.
+    invalidate();
+  });
 }

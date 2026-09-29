@@ -161,7 +161,11 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
 
 // MARK: Platform
 
-pub struct MacPlatform;
+#[derive(Default)]
+pub struct MacPlatform {
+    /// The shared Bun process that runs plugins.
+    plugins: crate::plugin::Runner,
+}
 
 impl Platform for MacPlatform {
     fn main_screen(&self) -> Option<Screen> {
@@ -355,14 +359,23 @@ impl Platform for MacPlatform {
     fn start_plugin(
         &self,
         manifest: &crate::plugin::Manifest,
+        settings: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<crate::plugin::Connection, String> {
         static BUN: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
         let bun = BUN
             .get_or_init(crate::plugin::find_bun)
             .as_ref()
             .ok_or("Plugins need Bun. Install it from bun.sh, then reload.")?;
-        crate::plugin::spawn(manifest, bun, &crate::plugin::sdk_dir())
+        self.plugins
+            .start(manifest, settings, bun, &crate::plugin::sdk_dir())
             .map_err(|err| format!("Couldn't start {}: {err}", manifest.name))
+    }
+
+    fn create_plugin(&self, name: &str) -> Result<crate::plugin::Manifest, String> {
+        let dir = crate::plugin::plugins_dir();
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        crate::plugin::create(&dir, name)
+            .map_err(|err| format!("Couldn't create the plugin: {err}"))
     }
 }
 

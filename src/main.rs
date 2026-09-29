@@ -12,6 +12,7 @@ mod motion;
 mod platform;
 mod plugin;
 mod plugin_ui;
+mod settings_plugins;
 mod settings_window;
 mod shortcut;
 mod shortcut_recorder;
@@ -227,6 +228,21 @@ impl Panels {
                     .filter(|_| motion)
                     .map(|previous| previous.arrow_tip());
                 macos::hide_card(&self.card.window, anchor);
+                // A card that took the keyboard, for a plugin's text field,
+                // hands it back once it has faded, so typing returns to the
+                // app underneath.
+                if self.card.window.isKeyWindow() {
+                    let window = self.card.window.clone();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor()
+                            .timer(motion::CARD_OUT.duration + std::time::Duration::from_millis(30))
+                            .await;
+                        if window.alphaValue() < 0.01 {
+                            window.orderOut(None);
+                        }
+                    })
+                    .detach();
+                }
             }
         }
     }
@@ -649,7 +665,7 @@ fn run(cx: &mut App) -> Result<(), String> {
     gpui_kit::init(cx);
     macos::set_accessory_policy();
 
-    let platform: Rc<dyn Platform> = Rc::new(macos::MacPlatform);
+    let platform: Rc<dyn Platform> = Rc::new(macos::MacPlatform::default());
     let screen = platform.main_screen().ok_or("no display found")?;
     let config = Config::load_or_create(|id| platform.app_by_bundle_id(id).is_some())
         .map_err(|err| format!("couldn't read {}: {err}", Config::path().display()))?;

@@ -8,7 +8,7 @@ use crate::{
     dock::{Dock, Services},
     geometry::{self, Edge, Point},
     platform::{LoginItem, Platform, fake::FakePlatform},
-    plugin::{HostMessage, Incoming, PluginMessage},
+    plugin::{HostMessage, PluginMessage},
     settings_window::{SettingsEvent, SettingsWindow, Tab},
     views::{CardChrome, CardView, DockView},
     weather::Place,
@@ -813,6 +813,8 @@ fn settings_tabs_switch_by_click_and_command_number(cx: &mut TestAppContext) {
     h.click(cx, ("tab", 2usize));
     assert_eq!(h.tab(cx), Tab::Items);
     h.press(cx, "cmd-4");
+    assert_eq!(h.tab(cx), Tab::Plugins);
+    h.press(cx, "cmd-5");
     assert_eq!(h.tab(cx), Tab::Weather);
     h.press(cx, "cmd-2");
     assert_eq!(h.tab(cx), Tab::Dock);
@@ -899,7 +901,7 @@ fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![ItemConfig::Weather]);
-    h.press(cx, "cmd-4");
+    h.press(cx, "cmd-5");
     cx.update_window(h.window, |_, window, cx| {
         h.view.update(cx, |view, cx| view.focus_city(window, cx));
     })
@@ -939,14 +941,51 @@ fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
 
 // MARK: Plugins
 
-fn plugin_renders(h: &Harness, cx: &mut TestAppContext, surface: &str, tree: serde_json::Value) {
-    h.platform.plugin_says(
-        "counter",
-        Incoming::Message(PluginMessage::Render {
-            surface: surface.into(),
-            tree: serde_json::from_value(tree).unwrap(),
-        }),
-    );
+fn plugin_says(h: &Harness, cx: &mut TestAppContext, id: &str, message: PluginMessage) {
+    h.platform.plugin_says(id, message);
+    cx.run_until_parked();
+}
+
+fn render(surface: &str, tree: serde_json::Value) -> PluginMessage {
+    PluginMessage::Render {
+        surface: surface.into(),
+        tree: serde_json::from_value(tree).unwrap(),
+    }
+}
+
+/// Events the host sent to plugin `id`, as (handler, value).
+fn events(h: &Harness, id: &str) -> Vec<(String, serde_json::Value)> {
+    h.platform
+        .plugin_sent
+        .borrow()
+        .iter()
+        .filter(|(plugin, _)| plugin == id)
+        .filter_map(|(_, message)| match message {
+            HostMessage::Event { handler, value } => Some((handler.clone(), value.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn sent(h: &Harness, id: &str) -> Vec<HostMessage> {
+    h.platform
+        .plugin_sent
+        .borrow()
+        .iter()
+        .filter(|(plugin, _)| plugin == id)
+        .map(|(_, message)| message.clone())
+        .collect()
+}
+
+fn open_plugin_card(h: &Harness, cx: &mut TestAppContext, item: &str) {
+    h.reveal(cx);
+    let index = h.item_ids(cx).iter().position(|id| id == item).unwrap();
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.set_item_hovered(index, true, cx))
+    });
+    cx.update_window(h.card_window, |_, window, cx| window.render_frame(cx))
+        .unwrap();
     cx.run_until_parked();
 }
 
@@ -958,28 +997,27 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
             id: "counter".into(),
         }],
     );
-    plugin_renders(
+    plugin_says(
         &h,
         cx,
-        "card",
-        serde_json::json!([{ "t": "Card", "p": { "title": "Counter" }, "c": [
-            { "t": "div", "p": { "id": "box", "w": 120, "h": 30, "bg": "blue", "rounded": 8,
-                                 "on_click": { "$h": "card:W/box#on_click" } }, "c": ["3"] },
-            { "t": "Button", "p": { "id": "add", "label": "Add", "variant": "primary",
-                                    "on_click": { "$h": "card:W/add#on_click" } }, "c": [] },
-            { "t": "Switch", "p": { "id": "sound", "checked": false,
-                                    "on_change": { "$h": "card:W/sound#on_change" } }, "c": [] }
-        ]}]),
+        "counter",
+        render(
+            "card",
+            serde_json::json!([{ "t": "Card", "p": { "title": "Counter" }, "c": [
+                { "t": "div", "p": { "id": "box", "w": 120, "h": 30, "bg": "blue", "rounded": 8,
+                                     "on_click": { "$h": "card:W/box#on_click" } }, "c": ["3"] },
+                { "t": "Button", "p": { "id": "add", "label": "Add", "variant": "primary",
+                                        "on_click": { "$h": "card:W/add#on_click" } }, "c": [] },
+                { "t": "Switch", "p": { "id": "sound", "checked": false,
+                                        "on_change": { "$h": "card:W/sound#on_change" } }, "c": [] }
+            ]}]),
+        ),
     );
+    open_plugin_card(&h, cx, "plugin:counter");
+    // Opening the card tells the plugin.
+    assert_eq!(sent(&h, "counter"), vec![HostMessage::Card { open: true }]);
 
-    h.reveal(cx);
-    cx.update_window(h.dock_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.hover("plugin:counter", cx);
-    })
-    .unwrap();
     cx.update_window(h.card_window, |_, window, cx| {
-        window.render_frame(cx);
         // Custom styles land as written.
         let size = window.find("plugin:counter:box").bounds().size;
         assert_eq!((size.width, size.height), (px(120.0), px(30.0)));
@@ -988,17 +1026,8 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
         window.click("plugin:counter:sound", cx);
     })
     .unwrap();
-
-    let sent = h.platform.plugin_sent.borrow();
-    let events: Vec<(String, serde_json::Value)> = sent
-        .iter()
-        .map(|(plugin, HostMessage::Event { handler, value })| {
-            assert_eq!(plugin, "counter");
-            (handler.clone(), value.clone())
-        })
-        .collect();
     assert_eq!(
-        events,
+        events(&h, "counter"),
         vec![
             ("card:W/add#on_click".to_string(), serde_json::Value::Null),
             ("card:W/box#on_click".to_string(), serde_json::Value::Null),
@@ -1008,13 +1037,173 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
             ),
         ]
     );
+
+    // Closing it tells the plugin too.
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, cx| {
+            dock.set_item_hovered(0, false, cx);
+            dock.set_card_hovered(false, cx);
+        })
+    });
+    cx.executor().advance_clock(Duration::from_millis(400));
+    cx.run_until_parked();
+    assert_eq!(
+        sent(&h, "counter").last(),
+        Some(&HostMessage::Card { open: false })
+    );
 }
 
 #[gpui_kit::test]
-fn plugins_show_their_problems_and_can_be_added_from_settings(cx: &mut TestAppContext) {
+fn plugin_patches_update_the_tree_and_mismatches_resync(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        render(
+            "card",
+            serde_json::json!([{ "t": "div", "p": { "id": "bar", "w": 40, "h": 10 }, "c": [] }]),
+        ),
+    );
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::Patch {
+            surface: "card".into(),
+            patches: serde_json::from_value(serde_json::json!([
+                { "op": "props", "path": [0], "props": { "id": "bar", "w": 90, "h": 10 } }
+            ]))
+            .unwrap(),
+        },
+    );
+    open_plugin_card(&h, cx, "plugin:counter");
+    cx.update_window(h.card_window, |_, window, _| {
+        assert_eq!(
+            window.find("plugin:counter:bar").bounds().size.width,
+            px(90.0)
+        );
+    })
+    .unwrap();
+
+    // A patch for a node that isn't there means the two sides disagree.
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::Patch {
+            surface: "card".into(),
+            patches: serde_json::from_value(serde_json::json!([
+                { "op": "replace", "path": [5, 1], "node": "x" }
+            ]))
+            .unwrap(),
+        },
+    );
+    assert_eq!(sent(&h, "counter").last(), Some(&HostMessage::Resync));
+}
+
+#[gpui_kit::test]
+fn plugin_inputs_report_typing_and_submit(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let tree = |value: &str| {
+        render(
+            "card",
+            serde_json::json!([{ "t": "Input", "p": {
+                "id": "name", "placeholder": "Name", "value": value,
+                "on_change": { "$h": "change" }, "on_submit": { "$h": "submit" }
+            }, "c": [] }]),
+        )
+    };
+    plugin_says(&h, cx, "counter", tree(""));
+    open_plugin_card(&h, cx, "plugin:counter");
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.click("plugin:counter:name", cx);
+        window.input("Ada", cx);
+    })
+    .unwrap();
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    let got = events(&h, "counter");
+    assert_eq!(
+        got.last(),
+        Some(&("submit".to_string(), serde_json::Value::from("Ada")))
+    );
+    assert!(got.contains(&("change".to_string(), serde_json::Value::from("Ada"))));
+
+    // The plugin clearing `value` empties the field; typing starts over.
+    plugin_says(&h, cx, "counter", tree("Ada"));
+    plugin_says(&h, cx, "counter", tree(""));
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.input("B", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        events(&h, "counter").last(),
+        Some(&("change".to_string(), serde_json::Value::from("B")))
+    );
+}
+
+#[gpui_kit::test]
+fn fitted_plugin_cards_take_their_content_height(cx: &mut TestAppContext) {
+    let h = setup(cx, vec![ItemConfig::Weather]);
+    let manifest = cx
+        .update(|cx| {
+            h.dock
+                .update(cx, |dock, cx| dock.create_plugin("Notes", cx))
+        })
+        .unwrap();
+    assert_eq!(manifest.height, None);
+    // The new plugin's code opens to edit.
+    assert_eq!(
+        h.platform.opened.borrow().last(),
+        Some(&PathBuf::from("/plugins/notes/index.tsx"))
+    );
+    plugin_says(
+        &h,
+        cx,
+        "notes",
+        render(
+            "card",
+            serde_json::json!([{ "t": "div", "p": { "h": 236 }, "c": [] }]),
+        ),
+    );
+    open_plugin_card(&h, cx, "plugin:notes");
+    cx.run_until_parked();
+    let height = cx.update(|cx| {
+        h.dock
+            .read(cx)
+            .plugin("notes")
+            .and_then(|state| state.height)
+    });
+    assert_eq!(height, Some(236.0));
+}
+
+#[gpui_kit::test]
+fn plugins_show_their_problems_and_ask_before_being_added(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![ItemConfig::Weather]);
     h.press(cx, "cmd-3");
     h.click(cx, "add-plugin:counter");
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert_eq!(h.item_ids(cx), ["weather"]);
+
+    h.click(cx, "add-plugin:counter");
+    cx.simulate_prompt_answer("Add Plugin");
+    cx.run_until_parked();
     assert_eq!(h.item_ids(cx), ["weather", "plugin:counter"]);
     assert_eq!(
         h.platform
@@ -1029,10 +1218,12 @@ fn plugins_show_their_problems_and_can_be_added_from_settings(cx: &mut TestAppCo
         })
     );
 
-    // Bun's compile errors show up in the card instead of a blank.
+    // Compile errors show up in the card instead of a blank.
     h.platform.plugin_says(
         "counter",
-        Incoming::Log("error: Expected \">\" but found \"}\"".into()),
+        PluginMessage::Error {
+            message: "error: Expected \">\" but found \"}\"\n    at index.tsx:3:4".into(),
+        },
     );
     cx.run_until_parked();
     let problem = cx.update(|cx| {
@@ -1046,4 +1237,128 @@ fn plugins_show_their_problems_and_can_be_added_from_settings(cx: &mut TestAppCo
     // Removing it stops it.
     h.click(cx, "remove:plugin:counter");
     assert!(cx.update(|cx| h.dock.read(cx).plugin("counter").is_none()));
+}
+
+#[gpui_kit::test]
+fn plugin_settings_save_and_reach_the_plugin(cx: &mut TestAppContext) {
+    let h = open_settings(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    // It started with the manifest's defaults.
+    assert_eq!(
+        h.platform.plugin_started.borrow()[0].1["unit"],
+        serde_json::Value::from("clicks")
+    );
+    h.press(cx, "cmd-4");
+    h.click(cx, "plugin-field:counter:unit");
+    h.press(cx, "cmd-a");
+    cx.update_window(h.window, |_, window, cx| window.input("steps", cx))
+        .unwrap();
+    cx.run_until_parked();
+
+    let messages: Vec<HostMessage> = h
+        .platform
+        .plugin_sent
+        .borrow()
+        .iter()
+        .map(|(_, message)| message.clone())
+        .collect();
+    let expected = HostMessage::Settings {
+        values: serde_json::Map::from_iter([("unit".into(), serde_json::Value::from("steps"))]),
+    };
+    assert_eq!(messages.last(), Some(&expected));
+    let saved = h.platform.saved_configs.borrow();
+    assert_eq!(
+        saved.last().unwrap().plugin_settings["counter"]["unit"],
+        serde_json::Value::from("steps")
+    );
+}
+
+#[gpui_kit::test]
+fn the_plugins_tab_creates_plugins_and_shows_logs(cx: &mut TestAppContext) {
+    let h = open_settings(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    h.platform.plugin_says(
+        "counter",
+        PluginMessage::Log {
+            line: "hello from counter".into(),
+        },
+    );
+    cx.run_until_parked();
+    let logs = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            h.dock.read(cx).plugin("counter").map(|state| {
+                state
+                    .logs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+    assert_eq!(logs(cx), Some(vec!["hello from counter".to_string()]));
+
+    h.press(cx, "cmd-4");
+    h.click(cx, "clear-logs:counter");
+    assert_eq!(logs(cx), Some(Vec::new()));
+
+    h.click(cx, "new-plugin-name");
+    cx.update_window(h.window, |_, window, cx| window.input("Notes", cx))
+        .unwrap();
+    h.click(cx, "create-plugin");
+    assert_eq!(h.item_ids(cx), ["plugin:counter", "plugin:notes"]);
+}
+
+#[gpui_kit::test]
+fn plugin_transitions_ease_and_scroll_areas_clip(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let tree = |width: u32| {
+        render(
+            "card",
+            serde_json::json!([
+                { "t": "div", "p": { "id": "bar", "w": width, "h": 8, "transition": 200 }, "c": [] },
+                { "t": "div", "p": { "id": "list", "h": 50, "overflow_y_scroll": true }, "c": [
+                    { "t": "div", "p": { "h": 400 }, "c": [] }
+                ] }
+            ]),
+        )
+    };
+    plugin_says(&h, cx, "counter", tree(40));
+    open_plugin_card(&h, cx, "plugin:counter");
+    let width = |cx: &mut TestAppContext| {
+        cx.update_window(h.card_window, |_, window, cx| {
+            window.render_frame(cx);
+            f32::from(window.find("plugin:counter:bar").bounds().size.width)
+        })
+        .unwrap()
+    };
+    assert_eq!(width(cx), 40.0);
+
+    plugin_says(&h, cx, "counter", tree(140));
+    cx.executor().advance_clock(Duration::from_millis(60));
+    let midway = width(cx);
+    assert!(midway > 40.0 && midway < 140.0, "midway at {midway}");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    assert_eq!(width(cx), 140.0);
+
+    // A scroll area keeps its own height; its content scrolls inside.
+    cx.update_window(h.card_window, |_, window, _| {
+        assert_eq!(
+            window.find("plugin:counter:list").bounds().size.height,
+            px(50.0)
+        );
+    })
+    .unwrap();
 }

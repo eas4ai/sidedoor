@@ -1,11 +1,23 @@
 // A focus timer: a native card with custom-styled pieces, and a dock tile
 // that counts down.
 
-import { Button, Card, Icon, Segmented, createStore, useInterval, widget } from "@sidekick/sdk";
+import {
+  Button,
+  Card,
+  Icon,
+  Segmented,
+  createStore,
+  sidekick,
+  useEffect,
+  useInterval,
+  useSetting,
+  widget,
+} from "@sidekick/sdk";
 
 const LENGTHS = [15, 25, 50];
 
-const timer = createStore({ minutes: 25, left: 25 * 60, running: false });
+const initial = Number(sidekick.settings().length ?? 25);
+const timer = createStore({ minutes: initial, left: initial * 60, running: false });
 
 const clock = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -29,6 +41,11 @@ export default widget({
 
   card() {
     const { minutes, left, running } = timer.use();
+    // A new default from Settings › Plugins applies while the timer is idle.
+    const length = Number(useSetting<string>("length") ?? 25);
+    useEffect(() => {
+      if (!timer.get().running) restart(length);
+    }, [length]);
     // The card always renders, so the clock ticks here.
     useInterval(
       () =>
@@ -47,7 +64,7 @@ export default widget({
           </div>
         </div>
         <div h={6} w_full rounded_full bg="track">
-          <div h_full rounded_full bg="orange" w={`${Math.round(progress * 100)}%`} />
+          <div h_full rounded_full bg="orange" w={`${Math.round(progress * 100)}%`} transition={900} />
         </div>
         <div flex items_center gap={8} mt={4}>
           <Segmented

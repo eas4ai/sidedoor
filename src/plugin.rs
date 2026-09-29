@@ -1,16 +1,21 @@
-//! Plugins: widgets written in TSX against the SDK in `sdk/`, each run by
-//! Bun in its own process. A plugin sends the trees it renders as JSON lines
-//! on stdout; the host draws them (see `plugin_ui`) and sends events back on
-//! stdin.
+//! Plugins: widgets written in TSX against the SDK in `sdk/`. One Bun
+//! process, the SDK's `supervisor.ts`, runs every plugin in its own Worker
+//! thread. A plugin sends each surface it renders once, then patches; the
+//! host draws them (see `plugin_ui`) and sends back events, settings and
+//! whether the card is open.
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     fs,
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
+    rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 /// A plugin found on disk: a folder whose `package.json` has a `sidekick`
@@ -23,10 +28,59 @@ pub struct Manifest {
     /// Lucide icon name, e.g. `"timer"`.
     pub icon: String,
     pub width: f64,
-    pub height: f64,
+    /// A fixed card height, or `None` to fit the content.
+    pub height: Option<f64>,
+    pub settings: Vec<SettingSpec>,
     pub dir: PathBuf,
     /// The entry file, relative to `dir`.
     pub main: PathBuf,
+}
+
+/// One setting a plugin declares, shown in Settings › Plugins.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct SettingSpec {
+    pub key: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(rename = "type", default)]
+    pub kind: SettingKind,
+    /// The choices of a `choice` setting.
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub default: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingKind {
+    #[default]
+    Text,
+    /// Text that is hidden while typed, like an API key.
+    Secret,
+    Toggle,
+    Choice,
+    Number,
+}
+
+impl SettingSpec {
+    /// The value before the user changes it.
+    pub fn default_value(&self) -> Value {
+        if let Some(value) = &self.default {
+            return value.clone();
+        }
+        match self.kind {
+            SettingKind::Text | SettingKind::Secret => Value::from(""),
+            SettingKind::Toggle => Value::from(false),
+            SettingKind::Number => Value::from(0),
+            SettingKind::Choice => self
+                .options
+                .first()
+                .cloned()
+                .map_or(Value::Null, Value::from),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -43,8 +97,10 @@ struct SidekickSection {
     icon: String,
     #[serde(default = "default_width")]
     width: f64,
-    #[serde(default = "default_height")]
-    height: f64,
+    #[serde(default)]
+    height: Option<f64>,
+    #[serde(default)]
+    settings: Vec<SettingSpec>,
 }
 
 fn default_icon() -> String {
@@ -52,9 +108,6 @@ fn default_icon() -> String {
 }
 fn default_width() -> f64 {
     280.0
-}
-fn default_height() -> f64 {
-    160.0
 }
 
 impl Manifest {
@@ -68,7 +121,8 @@ impl Manifest {
             name: section.name,
             icon: section.icon,
             width: section.width.clamp(120.0, 480.0),
-            height: section.height.clamp(60.0, 600.0),
+            height: section.height.map(|height| height.clamp(40.0, MAX_HEIGHT)),
+            settings: section.settings,
             dir: dir.to_path_buf(),
             main: PathBuf::from(package.main.unwrap_or_else(|| "index.tsx".into())),
         })
@@ -78,7 +132,24 @@ impl Manifest {
     pub fn icon_path(&self) -> String {
         icon_path(&self.icon)
     }
+
+    /// Every setting's value: what the user saved, else the default.
+    pub fn settings_with(&self, saved: Option<&Map<String, Value>>) -> Map<String, Value> {
+        self.settings
+            .iter()
+            .map(|spec| {
+                let value = saved
+                    .and_then(|saved| saved.get(&spec.key))
+                    .cloned()
+                    .unwrap_or_else(|| spec.default_value());
+                (spec.key.clone(), value)
+            })
+            .collect()
+    }
 }
+
+/// The tallest card a plugin gets, fitted or fixed.
+pub const MAX_HEIGHT: f64 = 600.0;
 
 /// Where Lucide icons live in the app's assets.
 pub fn icon_path(name: &str) -> String {
@@ -95,7 +166,11 @@ pub fn discover(dir: &Path) -> Vec<Manifest> {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && name != "node_modules"
+        })
         .filter_map(|entry| Manifest::read(&entry.path()))
         .collect();
     found.sort_by(|a, b| a.name.cmp(&b.name));
@@ -119,32 +194,100 @@ pub enum Node {
     },
 }
 
-/// What a plugin sends.
+/// A change to a rendered surface. `path` indexes into children, starting
+/// with the root.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Patch {
+    Replace {
+        path: Vec<usize>,
+        node: Node,
+    },
+    Props {
+        path: Vec<usize>,
+        props: Map<String, Value>,
+    },
+}
+
+fn node_at<'a>(tree: &'a mut [Node], path: &[usize]) -> Option<&'a mut Node> {
+    let (first, rest) = path.split_first()?;
+    let mut node = tree.get_mut(*first)?;
+    for index in rest {
+        match node {
+            Node::Element { children, .. } => node = children.get_mut(*index)?,
+            Node::Text(_) => return None,
+        }
+    }
+    Some(node)
+}
+
+/// Applies `patches` in order. `false` if one doesn't fit the tree, which
+/// means the host and the plugin disagree and the surface should be resent.
+pub fn apply_patches(tree: &mut [Node], patches: Vec<Patch>) -> bool {
+    for patch in patches {
+        match patch {
+            Patch::Replace { path, node } => match node_at(tree, &path) {
+                Some(target) => *target = node,
+                None => return false,
+            },
+            Patch::Props { path, props } => match node_at(tree, &path) {
+                Some(Node::Element { props: target, .. }) => *target = props,
+                _ => return false,
+            },
+        }
+    }
+    true
+}
+
+/// What a plugin sends, and what the supervisor says about it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginMessage {
-    Render { surface: String, tree: Vec<Node> },
-    OpenUrl { url: String },
-    OpenPath { path: String },
-    Copy { text: String },
-    Error { message: String },
+    Render {
+        surface: String,
+        tree: Vec<Node>,
+    },
+    Patch {
+        surface: String,
+        patches: Vec<Patch>,
+    },
+    OpenUrl {
+        url: String,
+    },
+    OpenPath {
+        path: String,
+    },
+    Copy {
+        text: String,
+    },
+    /// A `console.log` line.
+    Log {
+        line: String,
+    },
+    Error {
+        message: String,
+    },
+    /// The plugin's worker stopped.
+    Exited,
 }
 
-/// What the host sends.
+/// What the host sends a plugin.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostMessage {
-    Event { handler: String, value: Value },
-}
-
-/// Everything that comes back from a plugin process.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Incoming {
-    Message(PluginMessage),
-    /// A line the plugin wrote to stderr: its logs, or why it failed.
-    Log(String),
-    /// The process ended.
-    Exited,
+    Event {
+        handler: String,
+        value: Value,
+    },
+    /// Whether the plugin's card is showing.
+    Card {
+        open: bool,
+    },
+    Settings {
+        values: Map<String, Value>,
+    },
+    /// Send every surface whole again.
+    Resync,
 }
 
 /// The host's side of a running plugin.
@@ -155,92 +298,193 @@ pub trait PluginLink {
 /// A running plugin: messages to it, and what it sends back.
 pub struct Connection {
     pub link: Box<dyn PluginLink>,
-    pub incoming: UnboundedReceiver<Incoming>,
+    pub incoming: UnboundedReceiver<PluginMessage>,
 }
 
-// MARK: Processes
+// MARK: Supervisor
 
-/// A plugin running under Bun. Dropping it stops the process.
-struct Process {
+type Routes = Arc<Mutex<HashMap<String, UnboundedSender<PluginMessage>>>>;
+
+/// The Bun process that runs every plugin. Dropping it stops them all.
+struct Supervisor {
     child: Child,
     stdin: ChildStdin,
+    routes: Routes,
 }
 
-impl PluginLink for Process {
-    fn send(&mut self, message: &HostMessage) {
-        if let Ok(line) = serde_json::to_string(message) {
-            // A plugin that has exited just misses the event.
-            let _ = writeln!(self.stdin, "{line}").and_then(|()| self.stdin.flush());
+impl Supervisor {
+    fn spawn(bun: &Path, sdk: &Path) -> io::Result<Self> {
+        let mut child = Command::new(bun)
+            .arg(sdk.join("src/supervisor.ts"))
+            // Plugins compile JSX with the SDK's tsconfig, found from here.
+            .current_dir(sdk)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("no stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("no stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("no stderr"))?;
+        let routes: Routes = Arc::default();
+
+        let routing = routes.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                route(&routing, &line);
+            }
+            // The supervisor is gone, and every plugin with it.
+            let senders: Vec<_> = routing
+                .lock()
+                .map(|routes| routes.values().cloned().collect())
+                .unwrap_or_default();
+            for sender in senders {
+                let _ = sender.unbounded_send(PluginMessage::Exited);
+            }
+        });
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                eprintln!("[plugins] {line}");
+            }
+        });
+        Ok(Self {
+            child,
+            stdin,
+            routes,
+        })
+    }
+
+    fn is_running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    fn write(&mut self, plugin: &str, mut message: Value) {
+        if let Value::Object(fields) = &mut message {
+            fields.insert("plugin".into(), Value::from(plugin));
         }
+        // A supervisor that has exited just misses the message; its plugins
+        // hear `Exited` from the reader thread.
+        let _ = writeln!(self.stdin, "{message}").and_then(|()| self.stdin.flush());
     }
 }
 
-impl Drop for Process {
+impl Drop for Supervisor {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-/// Starts `manifest`'s plugin with Bun. It exits by itself when the host
-/// goes away and its stdin closes.
-pub fn spawn(manifest: &Manifest, bun: &Path, sdk: &Path) -> io::Result<Connection> {
-    prepare(&manifest.dir, sdk)?;
-    let data = crate::platform::support_dir()
-        .join("plugin-data")
-        .join(&manifest.id);
-    fs::create_dir_all(&data)?;
-
-    let mut child = Command::new(bun)
-        .arg(&manifest.main)
-        .current_dir(&manifest.dir)
-        .env("SIDEKICK_PLUGIN", "1")
-        .env("SIDEKICK_DATA_DIR", &data)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::other("no stdin"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("no stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::other("no stderr"))?;
-
-    let (sender, incoming) = unbounded();
-    read_lines(stdout, sender.clone(), |line| {
-        match serde_json::from_str::<PluginMessage>(&line) {
-            Ok(message) => Incoming::Message(message),
-            Err(_) => Incoming::Log(line),
-        }
-    });
-    read_lines(stderr, sender, Incoming::Log);
-    Ok(Connection {
-        link: Box::new(Process { child, stdin }),
-        incoming,
-    })
+/// Sends a line from the supervisor to the plugin it names.
+fn route(routes: &Routes, line: &str) {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        eprintln!("[plugins] {line}");
+        return;
+    };
+    let Some(plugin) = value.get("plugin").and_then(Value::as_str) else {
+        return;
+    };
+    let message = match serde_json::from_value::<PluginMessage>(value.clone()) {
+        Ok(message) => message,
+        Err(err) => PluginMessage::Log {
+            line: format!("unreadable message ({err}): {line}"),
+        },
+    };
+    let sender = routes
+        .lock()
+        .ok()
+        .and_then(|routes| routes.get(plugin).cloned());
+    if let Some(sender) = sender {
+        let _ = sender.unbounded_send(message);
+    }
 }
 
-fn read_lines(
-    source: impl io::Read + Send + 'static,
-    sender: UnboundedSender<Incoming>,
-    parse: impl Fn(String) -> Incoming + Send + 'static,
-) {
-    std::thread::spawn(move || {
-        for line in BufReader::new(source).lines() {
-            let Ok(line) = line else { break };
-            if sender.unbounded_send(parse(line)).is_err() {
-                return;
+/// Starts plugins in one shared supervisor, launched on first use and again
+/// if it dies.
+#[derive(Clone, Default)]
+pub struct Runner {
+    supervisor: Rc<RefCell<Option<Supervisor>>>,
+}
+
+impl Runner {
+    pub fn start(
+        &self,
+        manifest: &Manifest,
+        settings: &Map<String, Value>,
+        bun: &Path,
+        sdk: &Path,
+    ) -> io::Result<Connection> {
+        prepare(&manifest.dir, sdk)?;
+        let data = crate::platform::support_dir()
+            .join("plugin-data")
+            .join(&manifest.id);
+        fs::create_dir_all(&data)?;
+
+        let mut slot = self.supervisor.borrow_mut();
+        if !slot.as_mut().is_some_and(Supervisor::is_running) {
+            *slot = Some(Supervisor::spawn(bun, sdk)?);
+        }
+        let supervisor = slot.as_mut().expect("just started");
+        let (sender, incoming) = unbounded();
+        if let Ok(mut routes) = supervisor.routes.lock() {
+            routes.insert(manifest.id.clone(), sender);
+        }
+        let entry = manifest.dir.join(&manifest.main);
+        let entry = entry.canonicalize().unwrap_or(entry);
+        supervisor.write(
+            &manifest.id,
+            serde_json::json!({
+                "type": "start",
+                "entry": entry,
+                "data_dir": data,
+                "settings": settings,
+            }),
+        );
+        Ok(Connection {
+            link: Box::new(Link {
+                plugin: manifest.id.clone(),
+                supervisor: self.supervisor.clone(),
+            }),
+            incoming,
+        })
+    }
+}
+
+/// One plugin inside the supervisor. Dropping it stops the plugin.
+struct Link {
+    plugin: String,
+    supervisor: Rc<RefCell<Option<Supervisor>>>,
+}
+
+impl PluginLink for Link {
+    fn send(&mut self, message: &HostMessage) {
+        let Ok(message) = serde_json::to_value(message) else {
+            return;
+        };
+        if let Some(supervisor) = self.supervisor.borrow_mut().as_mut() {
+            supervisor.write(&self.plugin, message);
+        }
+    }
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        if let Some(supervisor) = self.supervisor.borrow_mut().as_mut() {
+            supervisor.write(&self.plugin, serde_json::json!({ "type": "stop" }));
+            if let Ok(mut routes) = supervisor.routes.lock() {
+                routes.remove(&self.plugin);
             }
         }
-        let _ = sender.unbounded_send(Incoming::Exited);
-    });
+    }
 }
 
 /// A value that changes whenever a file in the plugin changes, so the host
@@ -278,8 +522,8 @@ pub fn fingerprint(dir: &Path) -> u64 {
     hasher.finish()
 }
 
-/// Makes `@sidekick/sdk` importable from the plugin, and JSX compile against
-/// it, without the plugin having to install anything.
+/// Makes `@sidekick/sdk` importable from the plugin, and gives editors a
+/// tsconfig, without the plugin having to install anything.
 fn prepare(dir: &Path, sdk: &Path) -> io::Result<()> {
     let scope = dir.join("node_modules").join("@sidekick");
     let link = scope.join("sdk");
@@ -306,6 +550,80 @@ pub const TSCONFIG: &str = r#"{
     "skipLibCheck": true
   }
 }
+"#;
+
+/// A folder name from a display name: "My Widget!" → "my-widget".
+fn slug(name: &str) -> String {
+    let mut slug = String::new();
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "widget".into()
+    } else {
+        slug.into()
+    }
+}
+
+/// Creates a working plugin named `name` in `dir`, ready to edit.
+pub fn create(dir: &Path, name: &str) -> io::Result<Manifest> {
+    let name = match name.trim() {
+        "" => "My Widget",
+        name => name,
+    };
+    let base = slug(name);
+    let mut folder = dir.join(&base);
+    let mut n = 2;
+    while folder.exists() {
+        folder = dir.join(format!("{base}-{n}"));
+        n += 1;
+    }
+    fs::create_dir_all(&folder)?;
+    let package = serde_json::json!({
+        "name": folder.file_name().map(|name| name.to_string_lossy().into_owned()),
+        "private": true,
+        "main": "index.tsx",
+        "sidekick": {
+            "name": name,
+            "icon": "sparkles",
+            "width": 280,
+            "settings": [
+                { "key": "greeting", "title": "Greeting", "type": "text", "default": "Hello" }
+            ]
+        }
+    });
+    let package = serde_json::to_string_pretty(&package).map_err(io::Error::other)?;
+    fs::write(folder.join("package.json"), package + "\n")?;
+    fs::write(folder.join("tsconfig.json"), TSCONFIG)?;
+    let title = serde_json::to_string(name).map_err(io::Error::other)?;
+    fs::write(folder.join("index.tsx"), TEMPLATE.replace("TITLE", &title))?;
+    Manifest::read(&folder).ok_or_else(|| io::Error::other("the new plugin can't be read"))
+}
+
+const TEMPLATE: &str = r#"import { Button, Card, Text, useSetting, useState, widget } from "@sidekick/sdk";
+
+// Save this file and the card reloads. The @sidekick/sdk README lists
+// every element, component and style prop.
+export default widget({
+  card() {
+    const [count, setCount] = useState(0);
+    const greeting = useSetting<string>("greeting");
+    return (
+      <Card title={TITLE} accessory={`${count} clicks`}>
+        <Text secondary>{`${greeting}! Edit index.tsx to make this yours.`}</Text>
+        <div flex gap={8}>
+          <Button variant="primary" label="Click me" on_click={() => setCount(count + 1)} />
+          <Button label="Reset" on_click={() => setCount(0)} />
+        </div>
+      </Card>
+    );
+  },
+});
 "#;
 
 /// The SDK shipped inside the app bundle, or the repository's when run
@@ -353,9 +671,17 @@ pub fn find_bun() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    fn element(kind: &str, children: Vec<Node>) -> Node {
+        Node::Element {
+            kind: kind.into(),
+            props: Map::new(),
+            children,
+        }
+    }
+
     #[test]
     fn reads_trees_and_messages() {
-        let json = r#"{"type":"render","surface":"card","tree":[
+        let json = r#"{"type":"render","surface":"card","plugin":"timer","tree":[
             {"t":"Card","p":{"title":"Timer"},"c":[
                 {"t":"div","p":{"flex":true,"on_click":{"$h":"card:Widget/#on_click"}},"c":["25:00"]}
             ]}
@@ -376,19 +702,14 @@ mod tests {
         };
         assert_eq!(props["flex"], Value::Bool(true));
         assert_eq!(children, &vec![Node::Text("25:00".into())]);
-
-        let open: PluginMessage =
-            serde_json::from_str(r#"{"type":"open_url","url":"https://example.com"}"#).unwrap();
         assert_eq!(
-            open,
-            PluginMessage::OpenUrl {
-                url: "https://example.com".into()
-            }
+            serde_json::from_str::<PluginMessage>(r#"{"type":"exited","plugin":"timer"}"#).unwrap(),
+            PluginMessage::Exited
         );
     }
 
     #[test]
-    fn events_are_json_lines_the_sdk_reads() {
+    fn host_messages_are_json_the_sdk_reads() {
         let event = HostMessage::Event {
             handler: "card:Widget/#on_click".into(),
             value: Value::Bool(true),
@@ -397,6 +718,39 @@ mod tests {
             serde_json::to_string(&event).unwrap(),
             r#"{"type":"event","handler":"card:Widget/#on_click","value":true}"#
         );
+        assert_eq!(
+            serde_json::to_string(&HostMessage::Card { open: true }).unwrap(),
+            r#"{"type":"card","open":true}"#
+        );
+    }
+
+    #[test]
+    fn patches_edit_the_tree_in_place() {
+        let mut tree = vec![element(
+            "div",
+            vec![Node::Text("a".into()), element("div", vec![])],
+        )];
+        let patches: Vec<Patch> = serde_json::from_str(
+            r#"[{"op":"replace","path":[0,0],"node":"b"},
+                {"op":"props","path":[0,1],"props":{"w":20}}]"#,
+        )
+        .unwrap();
+        assert!(apply_patches(&mut tree, patches));
+        let Node::Element { children, .. } = &tree[0] else {
+            panic!("expected an element");
+        };
+        assert_eq!(children[0], Node::Text("b".into()));
+        let Node::Element { props, .. } = &children[1] else {
+            panic!("expected an element");
+        };
+        assert_eq!(props["w"], Value::from(20));
+
+        let wrong: Vec<Patch> =
+            serde_json::from_str(r#"[{"op":"props","path":[0,0],"props":{}}]"#).unwrap();
+        assert!(!apply_patches(&mut tree, wrong), "text has no props");
+        let missing: Vec<Patch> =
+            serde_json::from_str(r#"[{"op":"replace","path":[3],"node":"x"}]"#).unwrap();
+        assert!(!apply_patches(&mut tree, missing));
     }
 
     #[test]
@@ -406,7 +760,9 @@ mod tests {
         fs::create_dir_all(&plugin).unwrap();
         fs::write(
             plugin.join("package.json"),
-            r#"{"name":"pomodoro","main":"widget.tsx","sidekick":{"name":"Pomodoro","icon":"timer","height":9000}}"#,
+            r#"{"name":"pomodoro","main":"widget.tsx","sidekick":{"name":"Pomodoro","icon":"timer","height":9000,
+               "settings":[{"key":"sound","title":"Sound","type":"toggle"},
+                           {"key":"mode","title":"Mode","type":"choice","options":["focus","break"]}]}}"#,
         )
         .unwrap();
         fs::create_dir_all(dir.join("not-a-plugin")).unwrap();
@@ -415,10 +771,33 @@ mod tests {
         let found = discover(&dir);
         fs::remove_dir_all(&dir).ok();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].id, "pomodoro");
-        assert_eq!(found[0].main, PathBuf::from("widget.tsx"));
-        assert_eq!(found[0].width, 280.0);
-        assert_eq!(found[0].height, 600.0);
-        assert_eq!(found[0].icon_path(), "icons/timer.svg");
+        let manifest = &found[0];
+        assert_eq!(manifest.id, "pomodoro");
+        assert_eq!(manifest.main, PathBuf::from("widget.tsx"));
+        assert_eq!(manifest.width, 280.0);
+        assert_eq!(manifest.height, Some(MAX_HEIGHT));
+        assert_eq!(manifest.icon_path(), "icons/timer.svg");
+
+        let saved = Map::from_iter([("mode".to_string(), Value::from("break"))]);
+        let values = manifest.settings_with(Some(&saved));
+        assert_eq!(values["sound"], Value::from(false));
+        assert_eq!(values["mode"], Value::from("break"));
+        assert_eq!(manifest.settings_with(None)["mode"], Value::from("focus"));
+    }
+
+    #[test]
+    fn new_plugins_get_a_folder_and_a_working_template() {
+        let dir = std::env::temp_dir().join(format!("sidekick-new-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let first = create(&dir, "My Widget!").unwrap();
+        let second = create(&dir, "My Widget!").unwrap();
+        let source = fs::read_to_string(first.dir.join("index.tsx")).unwrap();
+        fs::remove_dir_all(&dir).ok();
+        assert_eq!(first.id, "my-widget");
+        assert_eq!(second.id, "my-widget-2");
+        assert_eq!(first.name, "My Widget!");
+        assert_eq!(first.height, None);
+        assert!(source.contains(r#"<Card title={"My Widget!"}"#));
+        assert_eq!(slug("  ..  "), "widget");
     }
 }

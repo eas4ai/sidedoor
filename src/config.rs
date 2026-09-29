@@ -21,6 +21,9 @@ pub struct Config {
     /// means none.
     #[serde(default = "default_shortcuts")]
     pub shortcuts: BTreeMap<String, String>,
+    /// Each plugin's settings by plugin id, as changed in Settings › Plugins.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_settings: BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -104,6 +107,7 @@ impl Config {
             appearance: Appearance::default(),
             weather: WeatherLocation::default(),
             shortcuts: default_shortcuts(),
+            plugin_settings: BTreeMap::new(),
         }
     }
 

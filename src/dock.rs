@@ -6,7 +6,7 @@ use crate::{
     config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation},
     geometry::{self, Edge, Rect, Reveal, Screen},
     platform::{Accessibility, AppInfo, LoginItem, Platform},
-    plugin::{HostMessage, Incoming, Manifest, Node, PluginLink, PluginMessage},
+    plugin::{HostMessage, Manifest, Node, PluginLink, PluginMessage, apply_patches},
     shortcut::Shortcut,
     stats::{Sampler, Snapshot},
     weather::{self, Weather},
@@ -99,6 +99,10 @@ pub struct PluginState {
     pub card: Option<Vec<Node>>,
     /// Why it isn't drawing, e.g. a compile error.
     pub problem: Option<SharedString>,
+    /// Recent `console.log` lines and errors, oldest first.
+    pub logs: VecDeque<SharedString>,
+    /// The card's content height as last drawn, for cards that fit it.
+    pub height: Option<f64>,
     link: Option<Box<dyn PluginLink>>,
     /// The plugin's files when it started; a change reloads it.
     fingerprint: u64,
@@ -187,6 +191,11 @@ pub struct Dock {
     weather_task: Option<Task<()>>,
     /// Running plugins, by plugin id.
     plugins: BTreeMap<String, PluginState>,
+    /// Saved plugin settings, by plugin id.
+    plugin_settings: BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+    /// The plugin whose card was last told it is open.
+    open_plugin: Option<String>,
+    _observe_self: Option<gpui_kit::Subscription>,
     _quit: Option<gpui_kit::Subscription>,
     _tasks: Vec<Task<()>>,
 }
@@ -255,6 +264,9 @@ impl Dock {
             live: services.live,
             weather_task,
             plugins: BTreeMap::new(),
+            plugin_settings: config.plugin_settings,
+            open_plugin: None,
+            _observe_self: None,
             _quit: quit,
             _tasks: tasks,
         }
@@ -262,6 +274,8 @@ impl Dock {
 
     /// Starts the plugins in the dock; call once the dock is an entity.
     pub fn start_plugins(&mut self, cx: &mut Context<Self>) {
+        // Tell a plugin when its card opens and closes, whatever caused it.
+        self._observe_self = Some(cx.observe_self(|this, _| this.sync_open_plugin()));
         let manifests: Vec<Manifest> = self
             .items
             .iter()
@@ -471,18 +485,20 @@ impl Dock {
             0
         };
         // A reload keeps showing what the plugin last drew until it draws again.
-        let (tile, card) = self
-            .plugins
-            .remove(&manifest.id)
-            .map_or((None, None), |old| (old.tile, old.card));
-        let state = match self.platform.start_plugin(manifest) {
+        let old = self.plugins.remove(&manifest.id);
+        let (tile, card, logs, height) = match old {
+            Some(old) => (old.tile, old.card, old.logs, old.height),
+            None => (None, None, VecDeque::new(), None),
+        };
+        let settings = self.plugin_values(manifest);
+        let state = match self.platform.start_plugin(manifest, &settings) {
             Ok(connection) => {
                 let id = manifest.id.clone();
                 let mut incoming = connection.incoming;
                 let task = cx.spawn(async move |this, cx| {
                     while let Some(message) = incoming.next().await {
                         let alive = this
-                            .update(cx, |this, cx| this.plugin_incoming(&id, message, cx))
+                            .update(cx, |this, cx| this.plugin_message(&id, message, cx))
                             .is_ok();
                         if !alive {
                             break;
@@ -493,6 +509,8 @@ impl Dock {
                     tile,
                     card,
                     problem: None,
+                    logs,
+                    height,
                     link: Some(connection.link),
                     fingerprint,
                     _task: Some(task),
@@ -502,6 +520,8 @@ impl Dock {
                 tile,
                 card,
                 problem: Some(problem.into()),
+                logs,
+                height,
                 link: None,
                 fingerprint,
                 _task: None,
@@ -510,58 +530,150 @@ impl Dock {
         self.plugins.insert(manifest.id.clone(), state);
     }
 
-    fn plugin_incoming(&mut self, id: &str, incoming: Incoming, cx: &mut Context<Self>) {
+    fn plugin_message(&mut self, id: &str, message: PluginMessage, cx: &mut Context<Self>) {
         let Some(state) = self.plugins.get_mut(id) else {
             return;
         };
-        match incoming {
-            Incoming::Message(PluginMessage::Render { surface, tree }) => {
+        match message {
+            PluginMessage::Render { surface, tree } => {
                 match surface.as_str() {
                     "tile" => state.tile = Some(tree),
                     _ => state.card = Some(tree),
                 }
                 state.problem = None;
             }
-            Incoming::Message(PluginMessage::Error { message }) => {
-                eprintln!("sidekick: plugin {id}: {message}");
+            PluginMessage::Patch { surface, patches } => {
+                let tree = match surface.as_str() {
+                    "tile" => state.tile.as_mut(),
+                    _ => state.card.as_mut(),
+                };
+                let applied = tree.is_some_and(|tree| apply_patches(tree, patches));
+                if !applied {
+                    // Out of step with the plugin: ask for everything again.
+                    if let Some(link) = state.link.as_mut() {
+                        link.send(&HostMessage::Resync);
+                    }
+                    return;
+                }
+                state.problem = None;
+            }
+            PluginMessage::Error { message } => {
+                push_log(&mut state.logs, &message);
                 state.problem = Some(
                     message
                         .lines()
                         .next()
                         .unwrap_or_default()
+                        .trim_start_matches("error: ")
                         .to_string()
                         .into(),
                 );
             }
-            Incoming::Message(PluginMessage::OpenUrl { url }) => {
-                self.open_path(std::path::Path::new(&url));
-                return;
+            PluginMessage::Log { line } => {
+                push_log(&mut state.logs, &line);
             }
-            Incoming::Message(PluginMessage::OpenPath { path }) => {
-                self.open_path(std::path::Path::new(&path));
-                return;
-            }
-            Incoming::Message(PluginMessage::Copy { text }) => {
-                self.platform.write_pasteboard(&ClipKind::Text { text });
-                return;
-            }
-            Incoming::Log(line) => {
-                eprintln!("[{id}] {line}");
-                // Bun reports compile and runtime failures as `error: …`.
-                if let Some(message) = line.trim_start().strip_prefix("error:") {
-                    state.problem = Some(message.trim().to_string().into());
-                } else {
-                    return;
-                }
-            }
-            Incoming::Exited => {
+            PluginMessage::Exited => {
                 state.link = None;
                 if state.problem.is_none() {
                     state.problem = Some("The plugin stopped.".into());
                 }
             }
+            PluginMessage::OpenUrl { url } => {
+                self.open_path(std::path::Path::new(&url));
+                return;
+            }
+            PluginMessage::OpenPath { path } => {
+                self.open_path(std::path::Path::new(&path));
+                return;
+            }
+            PluginMessage::Copy { text } => {
+                self.platform.write_pasteboard(&ClipKind::Text { text });
+                return;
+            }
         }
         cx.notify();
+    }
+
+    /// Tells plugins when their card opens or closes.
+    fn sync_open_plugin(&mut self) {
+        let open = self.card().and_then(|(_, item)| match &item.kind {
+            ItemKind::Plugin(manifest) => Some(manifest.id.clone()),
+            _ => None,
+        });
+        if open == self.open_plugin {
+            return;
+        }
+        let closed = std::mem::replace(&mut self.open_plugin, open.clone());
+        for (id, open) in [(closed, false), (open, true)] {
+            let link = id
+                .and_then(|id| self.plugins.get_mut(&id))
+                .and_then(|state| state.link.as_mut());
+            if let Some(link) = link {
+                link.send(&HostMessage::Card { open });
+            }
+        }
+    }
+
+    /// A plugin's settings: saved values over the manifest's defaults.
+    pub fn plugin_values(&self, manifest: &Manifest) -> serde_json::Map<String, serde_json::Value> {
+        manifest.settings_with(self.plugin_settings.get(&manifest.id))
+    }
+
+    pub fn set_plugin_setting(
+        &mut self,
+        manifest: &Manifest,
+        key: &str,
+        value: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = self.plugin_settings.entry(manifest.id.clone()).or_default();
+        if saved.get(key) == Some(&value) {
+            return;
+        }
+        saved.insert(key.to_string(), value);
+        self.save_config();
+        let values = self.plugin_values(manifest);
+        if let Some(link) = self
+            .plugins
+            .get_mut(&manifest.id)
+            .and_then(|state| state.link.as_mut())
+        {
+            link.send(&HostMessage::Settings { values });
+        }
+        cx.notify();
+    }
+
+    /// Records how tall a fitted card's content drew, so the card can match.
+    pub fn set_plugin_height(&mut self, id: &str, height: f64, cx: &mut Context<Self>) {
+        let height = height.clamp(40.0, crate::plugin::MAX_HEIGHT).round();
+        if let Some(state) = self.plugins.get_mut(id)
+            && state.height != Some(height)
+        {
+            state.height = Some(height);
+            cx.notify();
+        }
+    }
+
+    pub fn clear_plugin_logs(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(state) = self.plugins.get_mut(id) {
+            state.logs.clear();
+            cx.notify();
+        }
+    }
+
+    /// Creates a plugin from the template, puts it in the dock and opens its
+    /// source to edit.
+    pub fn create_plugin(
+        &mut self,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<Manifest, String> {
+        let manifest = self.platform.create_plugin(name)?;
+        if !self.add_plugin(manifest.clone(), cx) {
+            return Err("The dock is full. Remove an item to add another.".into());
+        }
+        self.open_path(&manifest.dir.join(&manifest.main));
+        Ok(manifest)
     }
 
     /// Reloads plugins whose files changed, as on save.
@@ -764,6 +876,7 @@ impl Dock {
                 .iter()
                 .map(|(id, shortcut)| (id.clone(), shortcut.to_config()))
                 .collect(),
+            plugin_settings: self.plugin_settings.clone(),
         };
         if let Err(err) = self.platform.save_config(&config) {
             eprintln!("sidekick: couldn't save the dock: {err}");
@@ -977,6 +1090,18 @@ impl Dock {
                 cx.background_executor().timer(delay).await;
             }
         })
+    }
+}
+
+/// How many log lines each plugin keeps.
+const PLUGIN_LOG_LINES: usize = 200;
+
+fn push_log(logs: &mut VecDeque<SharedString>, text: &str) {
+    for line in text.lines() {
+        if logs.len() == PLUGIN_LOG_LINES {
+            logs.pop_front();
+        }
+        logs.push_back(line.to_string().into());
     }
 }
 

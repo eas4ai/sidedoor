@@ -33,6 +33,8 @@ const TOOLTIP_PADDING: f64 = 24.0;
 /// Space between a tooltip's name and its shortcut.
 const TOOLTIP_HINT_GAP: f64 = 8.0;
 const CARD_WIDTH: f64 = 300.0;
+/// A fitted plugin card's height until its content has been measured.
+const FITTED_START: f64 = 120.0;
 const WEATHER_HEIGHT: f64 = 190.0;
 const STATS_HEIGHT: f64 = 206.0;
 /// Clipboard entries shown on the card.
@@ -94,7 +96,13 @@ pub fn card_size(item: &DockItem, dock: &Dock, text_width: impl Fn(&str) -> f64)
                 TOOLTIP_HEIGHT,
             )
         }
-        ItemKind::Plugin(manifest) => (manifest.width, manifest.height),
+        ItemKind::Plugin(manifest) => {
+            let fitted = dock.plugin(&manifest.id).and_then(|state| state.height);
+            (
+                manifest.width,
+                manifest.height.or(fitted).unwrap_or(FITTED_START),
+            )
+        }
         ItemKind::Weather => (CARD_WIDTH, WEATHER_HEIGHT),
         ItemKind::Stats => (CARD_WIDTH, STATS_HEIGHT),
         ItemKind::Clipboard => {
@@ -297,8 +305,46 @@ impl Render for DockView {
         let ram = ram.map(|value| transition("tile:ram", value, number_tween(), window, cx));
 
         let view = cx.entity();
+        let palette = Palette::new(window, self.dock.read(cx).accessibility);
+        // Plugin tiles draw with the window, which the dock borrow below
+        // would block.
+        let plugin_tiles: Vec<(
+            usize,
+            crate::plugin::Manifest,
+            Option<Vec<crate::plugin::Node>>,
+        )> = {
+            let dock = self.dock.read(cx);
+            dock.items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| match &item.kind {
+                    ItemKind::Plugin(manifest) => Some((
+                        index,
+                        manifest.clone(),
+                        dock.plugin(&manifest.id)
+                            .and_then(|state| state.tile.clone()),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut plugin_tiles: std::collections::HashMap<usize, AnyElement> = plugin_tiles
+            .into_iter()
+            .map(|(index, manifest, tile)| {
+                let scale = motions.get(index).map_or(1.0, |motion| motion.scale);
+                let tile = plugin_tile(
+                    &self.dock,
+                    &manifest,
+                    tile.as_deref(),
+                    scale,
+                    palette,
+                    window,
+                    cx,
+                );
+                (index, tile)
+            })
+            .collect();
         let dock = self.dock.read(cx);
-        let palette = Palette::new(window, dock.accessibility);
         let edge = dock.edge;
         let vertical = edge.is_vertical();
         let count = dock.items.len();
@@ -315,9 +361,9 @@ impl Render for DockView {
                     ItemKind::Clipboard => {
                         clipboard_tile(dock.history.len(), motion.scale, palette)
                     }
-                    ItemKind::Plugin(manifest) => {
-                        plugin_tile(&self.dock, dock, manifest, motion.scale, palette)
-                    }
+                    ItemKind::Plugin(_) => plugin_tiles
+                        .remove(&index)
+                        .unwrap_or_else(|| div().into_any_element()),
                 };
                 let shortcut = dock.shortcut_for(&item.id).map(ToString::to_string);
                 slot(
@@ -530,29 +576,15 @@ pub fn widget_glyph(kind: &ItemKind) -> SharedString {
 /// A plugin's own tile, or its icon until it draws one.
 fn plugin_tile(
     dock_entity: &Entity<Dock>,
-    dock: &Dock,
     manifest: &crate::plugin::Manifest,
+    tile: Option<&[crate::plugin::Node]>,
     scale: f32,
     palette: Palette,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
-    let surface = crate::plugin_ui::Surface {
-        dock: dock_entity.clone(),
-        plugin: manifest.id.clone().into(),
-        palette,
-    };
-    match dock
-        .plugin(&manifest.id)
-        .and_then(|state| state.tile.as_ref())
-    {
-        Some(tile) => div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .children(surface.render(tile, "tile"))
-            .into_any_element(),
-        None => div()
+    let Some(tile) = tile else {
+        return div()
             .size_full()
             .flex()
             .items_center()
@@ -562,23 +594,7 @@ fn plugin_tile(
                 20.0 * scale,
                 palette.label,
             ))
-            .into_any_element(),
-    }
-}
-
-/// A plugin's card: what it drew, or why it can't draw yet.
-fn plugin_card(
-    dock_entity: &Entity<Dock>,
-    dock: &Dock,
-    manifest: &crate::plugin::Manifest,
-    palette: Palette,
-) -> AnyElement {
-    let state = dock.plugin(&manifest.id);
-    if let Some(problem) = state.and_then(|state| state.problem.as_ref()) {
-        return message_card(&manifest.name, problem, palette);
-    }
-    let Some(card) = state.and_then(|state| state.card.as_ref()) else {
-        return message_card(&manifest.name, "Starting…", palette);
+            .into_any_element();
     };
     let surface = crate::plugin_ui::Surface {
         dock: dock_entity.clone(),
@@ -589,8 +605,80 @@ fn plugin_card(
         .size_full()
         .flex()
         .flex_col()
-        .children(surface.render(card, "card"))
+        .items_center()
+        .justify_center()
+        .children(surface.render(tile, "tile", window, cx))
         .into_any_element()
+}
+
+/// What a plugin's card shows, copied out of the dock so it can be drawn
+/// with the window at hand.
+struct PluginCard {
+    manifest: crate::plugin::Manifest,
+    tree: Option<Vec<crate::plugin::Node>>,
+    problem: Option<SharedString>,
+}
+
+impl PluginCard {
+    fn of(dock: &Dock) -> Option<Self> {
+        let (_, item) = dock.card()?;
+        let ItemKind::Plugin(manifest) = &item.kind else {
+            return None;
+        };
+        let state = dock.plugin(&manifest.id);
+        Some(Self {
+            manifest: manifest.clone(),
+            tree: state.and_then(|state| state.card.clone()),
+            problem: state.and_then(|state| state.problem.clone()),
+        })
+    }
+
+    /// What the plugin drew, or why it can't draw yet. A card without a
+    /// fixed height reports its content's height so the window can fit it.
+    fn render(
+        self,
+        dock_entity: &Entity<Dock>,
+        palette: Palette,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let name = self.manifest.name.clone();
+        let content = match (&self.problem, &self.tree) {
+            (Some(problem), _) => message_card(&name, problem, palette),
+            (None, None) => message_card(&name, "Starting…", palette),
+            (None, Some(tree)) => {
+                let surface = crate::plugin_ui::Surface {
+                    dock: dock_entity.clone(),
+                    plugin: self.manifest.id.clone().into(),
+                    palette,
+                };
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .children(surface.render(tree, "card", window, cx))
+                    .into_any_element()
+            }
+        };
+        if self.manifest.height.is_some() {
+            return content;
+        }
+        let (dock, id) = (dock_entity.clone(), self.manifest.id.clone());
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .on_children_prepainted(move |bounds, _, cx| {
+                let top = bounds.iter().map(|b| b.top()).min();
+                let bottom = bounds.iter().map(|b| b.bottom()).max();
+                if let (Some(top), Some(bottom)) = (top, bottom) {
+                    let height = f64::from(f32::from(bottom - top));
+                    dock.update(cx, |dock, cx| dock.set_plugin_height(&id, height, cx));
+                }
+            })
+            .child(content)
+            .into_any_element()
+    }
 }
 
 fn app_tile(app: &AppInfo, motion: SlotMotion, palette: Palette, vertical: bool) -> AnyElement {
@@ -812,8 +900,12 @@ impl Render for CardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let readings = self.sample_readings(window, cx);
         let animate = !cx.reduce_motion();
+        let palette = Palette::new(window, self.dock.read(cx).accessibility);
+        // Plugin cards draw with the window, which the dock borrow below
+        // would block.
+        let mut plugin_card = PluginCard::of(self.dock.read(cx))
+            .map(|card| card.render(&self.dock, palette, window, cx));
         let dock = self.dock.read(cx);
-        let palette = Palette::new(window, dock.accessibility);
         let placement = self.chrome.read(cx).placement;
         let content = dock.card().map(|(_, item)| {
             let content = match &item.kind {
@@ -825,7 +917,9 @@ impl Render for CardView {
                 ItemKind::Weather => weather_card(dock, palette),
                 ItemKind::Stats => stats_card(dock, readings.as_ref(), palette),
                 ItemKind::Clipboard => clipboard_card(&self.dock, dock, animate, palette),
-                ItemKind::Plugin(manifest) => plugin_card(&self.dock, dock, manifest, palette),
+                ItemKind::Plugin(_) => plugin_card
+                    .take()
+                    .unwrap_or_else(|| div().into_any_element()),
             };
             let content = div().relative().size_full().child(content);
             if !animate {

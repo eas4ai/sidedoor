@@ -103,6 +103,9 @@ export interface StyleProps {
   left?: Length;
   inset_0?: boolean;
   overflow_hidden?: boolean;
+  /** Scrolls vertically when the content is taller than the element. */
+  overflow_y_scroll?: boolean;
+  overflow_x_scroll?: boolean;
 
   // Paint
   bg?: Color;
@@ -137,6 +140,14 @@ export interface StyleProps {
   hover?: StyleProps;
   /** Styles applied while the element is pressed. */
   active?: StyleProps;
+
+  /**
+   * Animates numeric style props (sizes, spacing, position, `opacity`,
+   * `rounded`, `text_size`) to their new values instead of jumping: a
+   * duration in milliseconds for an ease-out, or `{ spring: true }` for the
+   * app's own spring.
+   */
+  transition?: number | { duration?: number; spring?: boolean };
 }
 
 export interface EventProps {
@@ -230,6 +241,20 @@ export interface SparklineProps extends StyleProps {
   /** 0 to 1 each. */
   values: number[];
   color?: Color;
+}
+
+export interface InputProps extends StyleProps {
+  /** Required: it keeps the field's text and cursor between renders. */
+  id: string | number;
+  /** Changing it from the plugin (e.g. to `""` after submit) replaces the text. */
+  value?: string;
+  placeholder?: string;
+  /** Hides what is typed, for passwords and keys. */
+  secret?: boolean;
+  icon?: IconName;
+  on_change?: (value: string) => void;
+  /** Return was pressed. */
+  on_submit?: (value: string) => void;
 }
 
 export interface FooterProps extends StyleProps, ChildrenProps {}

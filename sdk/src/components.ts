@@ -9,6 +9,7 @@ import type {
   DividerProps,
   FooterProps,
   IconProps,
+  InputProps,
   KeycapProps,
   ListRowProps,
   MeterProps,
@@ -34,6 +35,8 @@ export const Title = native<TextProps>("Title");
 export const Text = native<TextProps>("Text");
 /** A Lucide icon. */
 export const Icon = native<IconProps>("Icon");
+/** A text field. The card takes keyboard focus while you type in it. */
+export const Input = native<InputProps>("Input");
 /** A macOS push button, or a link-style button in cards. */
 export const Button = native<ButtonProps>("Button");
 /** The system switch. */

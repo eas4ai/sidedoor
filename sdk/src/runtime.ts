@@ -254,3 +254,39 @@ export function reset() {
   handlers = new Map();
   pendingEffects = [];
 }
+
+/** A change to a rendered surface; `path` indexes into children from the root. */
+export type Patch =
+  | { op: "replace"; path: number[]; node: Node }
+  | { op: "props"; path: number[]; props: Record<string, unknown> };
+
+function sameProps(a: Record<string, unknown>, b: Record<string, unknown>) {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => key in b && JSON.stringify(a[key]) === JSON.stringify(b[key]));
+}
+
+function diffNode(previous: Node, next: Node, path: number[], patches: Patch[]) {
+  if (typeof previous === "string" || typeof next === "string") {
+    if (previous !== next) patches.push({ op: "replace", path, node: next });
+    return;
+  }
+  if (previous.t !== next.t || previous.c.length !== next.c.length) {
+    patches.push({ op: "replace", path, node: next });
+    return;
+  }
+  if (!sameProps(previous.p, next.p)) patches.push({ op: "props", path, props: next.p });
+  next.c.forEach((child, index) => diffNode(previous.c[index], child, [...path, index], patches));
+}
+
+/**
+ * The patches that turn `previous` into `next`, so a re-render sends only
+ * what changed. `null` when the roots differ in number and the whole surface
+ * should be sent instead.
+ */
+export function diff(previous: Node[], next: Node[]): Patch[] | null {
+  if (previous.length !== next.length) return null;
+  const patches: Patch[] = [];
+  next.forEach((node, index) => diffNode(previous[index], node, [index], patches));
+  return patches;
+}

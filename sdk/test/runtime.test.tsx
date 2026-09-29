@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Button, Card, Meter, useEffect, useState } from "@sidekick/sdk";
-import { dispatch, renderSurfaces, reset, runEffects, setInvalidateHandler } from "../src/runtime";
+import { diff, dispatch, renderSurfaces, reset, runEffects, setInvalidateHandler } from "../src/runtime";
 
 afterEach(() => {
   reset();
@@ -100,4 +100,18 @@ test("keyed children keep their own state when reordered", async () => {
   order = ["b", "a"];
   tree = renderSurfaces({ card: Widget }).card;
   expect((tree[0] as unknown as Branch).c.map((row) => row.c[0])).toEqual(["b:1", "a:0"]);
+});
+
+test("re-renders become small patches", () => {
+  const before = [{ t: "div", p: { gap: 4 }, c: ["a", { t: "div", p: { w: 10 }, c: [] }] }];
+  const after = [{ t: "div", p: { gap: 4 }, c: ["b", { t: "div", p: { w: 20 }, c: [] }] }];
+  expect(diff(before, after)).toEqual([
+    { op: "replace", path: [0, 0], node: "b" },
+    { op: "props", path: [0, 1], props: { w: 20 } },
+  ]);
+  expect(diff(before, before)).toEqual([]);
+  // A different number of children replaces the parent.
+  const grown = [{ t: "div", p: { gap: 4 }, c: ["a"] }];
+  expect(diff(before, grown)).toEqual([{ op: "replace", path: [0], node: grown[0] }]);
+  expect(diff(before, [...before, ...before])).toBeNull();
 });

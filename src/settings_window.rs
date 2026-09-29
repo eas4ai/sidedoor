@@ -44,17 +44,25 @@ pub enum Tab {
     General,
     Dock,
     Items,
+    Plugins,
     Weather,
 }
 
 impl Tab {
-    pub const ALL: [Self; 4] = [Self::General, Self::Dock, Self::Items, Self::Weather];
+    pub const ALL: [Self; 5] = [
+        Self::General,
+        Self::Dock,
+        Self::Items,
+        Self::Plugins,
+        Self::Weather,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Dock => "Dock",
             Self::Items => "Items",
+            Self::Plugins => "Plugins",
             Self::Weather => "Weather",
         }
     }
@@ -64,6 +72,7 @@ impl Tab {
             Self::General => IconName::Settings,
             Self::Dock => IconName::PanelRight,
             Self::Items => IconName::LayoutGrid,
+            Self::Plugins => IconName::Puzzle,
             Self::Weather => IconName::CloudSun,
         }
     }
@@ -137,7 +146,7 @@ impl SettingsWindow {
                 crate::style::sync_kit_theme(window, cx);
                 cx.notify();
             }),
-            // The app has no menu bar, so ⌘W and ⌘1–4 are handled here.
+            // The app has no menu bar, so ⌘W and ⌘1–5 are handled here.
             cx.intercept_keystrokes(move |event, window, cx| {
                 if !event
                     .context_stack
@@ -158,7 +167,7 @@ impl SettingsWindow {
                             true
                         }
                         key => match key.parse::<usize>() {
-                            Ok(number @ 1..=4) => {
+                            Ok(number @ 1..=5) => {
                                 this.set_tab(Tab::ALL[number - 1], window, cx);
                                 true
                             }
@@ -268,9 +277,13 @@ impl SettingsWindow {
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let palette = Palette::new(window, self.dock.read(cx).accessibility);
+        // The Plugins page has text fields, which need the window.
+        let plugins = (self.tab == Tab::Plugins)
+            .then(|| crate::settings_plugins::plugins_page(&self.dock, palette, window, cx));
         let dock = self.dock.read(cx);
-        let palette = Palette::new(window, dock.accessibility);
         let sections = match self.tab {
+            Tab::Plugins => plugins.unwrap_or_default(),
             Tab::General => general_page(&self.dock, dock, palette),
             Tab::Dock => dock_page(&self.dock, dock, palette),
             Tab::Items => items_page(&view, &self.dock, dock, palette),
@@ -382,7 +395,7 @@ fn toolbar(view: &Entity<SettingsWindow>, current: Tab, palette: Palette) -> imp
 
 /// A grouped form section: a bold title, rounded rows split by hairlines,
 /// and an optional note underneath.
-fn section(
+pub(crate) fn section(
     title: Option<&'static str>,
     rows: Vec<AnyElement>,
     footer: Option<SharedString>,
@@ -432,7 +445,7 @@ fn section(
 }
 
 /// A labelled form row with its control on the trailing side.
-fn row(
+pub(crate) fn row(
     label: impl Into<SharedString>,
     detail: Option<SharedString>,
     control: impl IntoElement,
@@ -465,7 +478,7 @@ fn row(
 }
 
 /// A macOS push button.
-fn push_button(
+pub(crate) fn push_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     palette: Palette,
@@ -1038,11 +1051,8 @@ fn items_page(
         additions.push(row(
             manifest.name.clone(),
             Some(format!("Plugin · {}", manifest.dir.display()).into()),
-            push_button(id, "Add", palette, room, false, move |_, cx| {
-                let manifest = manifest.clone();
-                handler.update(cx, |dock, cx| {
-                    dock.add_plugin(manifest, cx);
-                });
+            push_button(id, "Add…", palette, room, false, move |window, cx| {
+                crate::settings_plugins::confirm_add(handler.clone(), manifest.clone(), window, cx)
             }),
             palette,
         ));

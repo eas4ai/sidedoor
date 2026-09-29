@@ -8,11 +8,12 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["bun"],
-    "paths": {
-      "@sidekick/sdk": ["./src/index.ts"],
-      "@sidekick/sdk/*": ["./src/*.ts"]
-    }
+    "types": [
+      "bun"
+    ]
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test"
+  ]
 }

@@ -15,7 +15,9 @@ div().flex().flex_col().gap(px(8.0)).px(px(12.0)).text_color(palette.secondary)
 
 ## A plugin
 
-A plugin is a folder in `~/Library/Application Support/SidekickClone/plugins/`:
+The quickest start is **Settings › Plugins › New Plugin**. It creates a
+working widget, adds it to the dock and opens its code. By hand, a plugin is
+a folder in `~/Library/Application Support/SidekickClone/plugins/`:
 
 ```
 plugins/pomodoro/
@@ -27,12 +29,26 @@ plugins/pomodoro/
 {
   "name": "pomodoro",
   "main": "index.tsx",
-  "sidekick": { "name": "Pomodoro", "icon": "timer", "width": 290, "height": 176 }
+  "sidekick": {
+    "name": "Pomodoro",
+    "icon": "timer",
+    "width": 290,
+    "settings": [
+      { "key": "length", "title": "Default length", "type": "choice", "options": ["15", "25", "50"] }
+    ]
+  }
 }
 ```
 
-`icon` is a [Lucide](https://lucide.dev/icons) name. `width` and `height` set the
-card size in points. Add the plugin to the dock in **Settings › Items**.
+- `icon`: a [Lucide](https://lucide.dev/icons) icon name.
+- `width`: the card width in points.
+- `height`: optional. Leave it out and the card fits its content, up to 600 points.
+- `settings`: optional. See [Settings](#settings).
+
+Add the plugin to the dock under **Settings › Plugins** or **Settings ›
+Items**. The app asks first, because a plugin runs with the same access as
+the app: your files, the network and other programs. Only add plugins from
+people you trust.
 
 ```tsx
 import { Button, Card, useState, widget } from "@sidekick/sdk";
@@ -52,7 +68,13 @@ export default widget({
 
 The app links `@sidekick/sdk` into the plugin's `node_modules` and adds a
 `tsconfig.json` if the plugin has none, so the plugin has nothing to install.
-Saving a file in the plugin reloads it, and errors show in its card. Anything logged with `console.log` goes to the app's stderr.
+Saving a file in the plugin reloads it. Errors show in its card, and
+`console.log` output shows in its log under **Settings › Plugins**.
+
+The app runs all plugins in one Bun process, each in its own Worker thread.
+Plugins don't share state, and one that throws or hangs only stops itself.
+The working directory is shared, so find your own files with
+`import.meta.dir` rather than relative paths.
 
 See `examples/plugins/pomodoro` for a full widget with a custom dock tile.
 
@@ -65,7 +87,8 @@ See `examples/plugins/pomodoro` for a full widget with a custom dock tile.
   the manifest's icon.
 
 Both are rendered all the time, not only while visible. Put timers in one
-of them only.
+of them only. `useCardOpen()` tells you whether the card is showing, which
+helps you refresh data when it opens or pause work while it's hidden.
 
 ## Elements
 
@@ -88,6 +111,7 @@ widgets. They also take style props, which are applied on top.
 | `Title`, `Text` | `variant` (`body`, `callout`, `caption`, `headline`, `title` or `display`), `secondary`, `tertiary` |
 | `Icon` | `name`, `icon_size`, `color` |
 | `Button` | `label`, `icon`, `variant` (`push`, `primary`, `destructive` or `link`), `disabled`, `on_click` |
+| `Input` | `id` (required), `value`, `placeholder`, `secret`, `icon`, `on_change(text)`, `on_submit(text)` |
 | `Switch` | `checked`, `on_change(checked)`, `disabled` |
 | `Segmented` | `options`, `selected`, `on_change(index)` |
 | `Meter` | `label`, `fraction` (0–1), `value`, `icon`, `color` |
@@ -103,14 +127,52 @@ becomes a boolean prop, and numbers are points.
 - **Flex:** `flex` `flex_col` `flex_row` `flex_wrap` `flex_1` `flex_none` `flex_grow` `flex_shrink_0` `items_*` `justify_*` `gap` `gap_x` `gap_y`
 - **Size:** `size` `w` `h` `min_w` `min_h` `max_w` `max_h`, which take a number, `"50%"`, `"full"` or `"auto"`, plus `size_full` `w_full` `h_full` `min_w_0`
 - **Spacing:** `p` `px` `py` `pt` `pr` `pb` `pl` `m` `mx` `my` `mt` `mr` `mb` `ml` `mx_auto` `mt_auto` `ml_auto`
-- **Position:** `relative` `absolute` `top` `right` `bottom` `left` `inset_0` `overflow_hidden`
+- **Position:** `relative` `absolute` `top` `right` `bottom` `left` `inset_0` `overflow_hidden` `overflow_y_scroll` `overflow_x_scroll`
 - **Paint:** `bg` `opacity` `rounded` `rounded_full` `border` `border_1` `border_t_1` `border_b_1` `border_color` `shadow_sm` `shadow_md` `shadow_lg`
 - **Text:** `text_color` `text_size` `font_weight` (`"medium"`, `"semibold"`, `"bold"` or a number) `font_family` `italic` `line_height` `text_center` `text_right` `truncate` `whitespace_nowrap` `line_clamp`
+
+`Input` takes keyboard focus in the card without switching apps. Typing
+reaches the plugin through `on_change`, and Return through `on_submit`. Set
+`value` to replace the text, for example `""` to clear the field after a
+submit. A `div` with `overflow_y_scroll` scrolls when its content is taller
+than its own height.
 
 Colors are palette tokens that follow light and dark mode (`label`,
 `secondary`, `tertiary`, `separator`, `stroke`, `fill`, `track`, `accent`,
 `on_accent`, `blue`, `green`, `orange`, `red`, `purple` and `transparent`) or
 hex values (`#rrggbb` or `#rrggbbaa`).
+
+## Motion
+
+Add `transition` to any element, or to a native component, and its numeric
+style props (sizes, spacing, position, `opacity`, `rounded` and `text_size`)
+animate to new values instead of jumping:
+
+```tsx
+<div h={6} rounded_full bg="orange" w={`${progress}%`} transition={400} />
+<div opacity={visible ? 1 : 0} transition={{ spring: true }} />
+```
+
+A number is a duration in milliseconds with the app's ease-out.
+`{ spring: true }` uses its spring. The app draws every frame of the
+animation, and Reduce Motion turns it off.
+
+## Settings
+
+Declare settings in `package.json`, and **Settings › Plugins** shows them as
+native rows:
+
+| `type` | Row | Value |
+| --- | --- | --- |
+| `text` | text field | string |
+| `secret` | hidden text field | string |
+| `number` | text field | number |
+| `toggle` | switch | boolean |
+| `choice` | segmented control, from `options` | string |
+
+Each setting takes `key`, `title`, and optionally `description` and
+`default`. Read a setting with `useSetting("key")` during render; the widget
+re-renders when it changes. Outside render, use `sidekick.settings()`.
 
 ## Hooks and state
 
@@ -133,8 +195,16 @@ Everything else, such as `fetch`, files and timers, is plain Bun.
 
 ## Protocol
 
-The app and a plugin exchange JSON lines. On stdout the plugin sends
+The app talks to the supervisor (`src/supervisor.ts`) in JSON lines tagged
+with a plugin id, and the supervisor passes messages to and from each
+plugin's worker.
+
+The plugin sends each surface whole once:
 `{"type":"render","surface":"card","tree":[…]}`, where a node is either a
-string or `{"t": tag, "p": props, "c": children}`. A function prop travels as
-`{"$h": key}`. On stdin the app sends
-`{"type":"event","handler":key,"value":…}` back.
+string or `{"t": tag, "p": props, "c": children}`. After that it sends only
+what changed: `{"type":"patch","surface":"card","patches":[{"op":"props","path":[0,2],"props":{…}}]}`,
+where `op` is `replace` or `props`. A function prop travels as `{"$h": key}`.
+
+The app sends `event` (a handler key and a value), `card` (whether the card
+is open), `settings`, and `resync` if a patch doesn't fit its copy of the
+tree.

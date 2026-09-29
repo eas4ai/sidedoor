@@ -83,7 +83,14 @@ pub trait Platform {
 
     /// Plugins installed in the plugins folder.
     fn plugins(&self) -> Vec<Manifest>;
-    fn start_plugin(&self, manifest: &Manifest) -> Result<Connection, String>;
+    /// Starts a plugin with its current settings.
+    fn start_plugin(
+        &self,
+        manifest: &Manifest,
+        settings: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Connection, String>;
+    /// Creates a new plugin from the template, in the plugins folder.
+    fn create_plugin(&self, name: &str) -> Result<Manifest, String>;
 }
 
 /// Where the clone keeps its files.
@@ -104,7 +111,7 @@ pub mod fake {
     //! An in-memory platform for tests.
 
     use super::*;
-    use crate::plugin::{HostMessage, Incoming, PluginLink};
+    use crate::plugin::{HostMessage, PluginLink, PluginMessage};
     use futures::channel::mpsc::{UnboundedSender, unbounded};
     use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -136,8 +143,10 @@ pub mod fake {
         pub login: RefCell<LoginItem>,
         pub plugins: RefCell<Vec<Manifest>>,
         /// Lets a test speak as each started plugin.
-        pub plugin_inbox: RefCell<HashMap<String, UnboundedSender<Incoming>>>,
+        pub plugin_inbox: RefCell<HashMap<String, UnboundedSender<PluginMessage>>>,
         pub plugin_sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
+        /// The settings each plugin was last started with.
+        pub plugin_started: RefCell<Vec<(String, serde_json::Map<String, serde_json::Value>)>>,
     }
 
     impl FakePlatform {
@@ -161,7 +170,15 @@ pub mod fake {
                 name: "Counter".into(),
                 icon: "timer".into(),
                 width: 260.0,
-                height: 200.0,
+                height: Some(200.0),
+                settings: vec![crate::plugin::SettingSpec {
+                    key: "unit".into(),
+                    title: "Unit".into(),
+                    description: None,
+                    kind: crate::plugin::SettingKind::Text,
+                    options: Vec::new(),
+                    default: Some(serde_json::Value::from("clicks")),
+                }],
                 dir: PathBuf::from("/plugins/counter"),
                 main: PathBuf::from("index.tsx"),
             }];
@@ -169,7 +186,7 @@ pub mod fake {
         }
 
         /// Delivers `incoming` as if plugin `id` had sent it.
-        pub fn plugin_says(&self, id: &str, incoming: Incoming) {
+        pub fn plugin_says(&self, id: &str, incoming: PluginMessage) {
             self.plugin_inbox.borrow()[id]
                 .unbounded_send(incoming)
                 .expect("the plugin is running");
@@ -250,7 +267,14 @@ pub mod fake {
         fn plugins(&self) -> Vec<Manifest> {
             self.plugins.borrow().clone()
         }
-        fn start_plugin(&self, manifest: &Manifest) -> Result<Connection, String> {
+        fn start_plugin(
+            &self,
+            manifest: &Manifest,
+            settings: &serde_json::Map<String, serde_json::Value>,
+        ) -> Result<Connection, String> {
+            self.plugin_started
+                .borrow_mut()
+                .push((manifest.id.clone(), settings.clone()));
             let (sender, incoming) = unbounded();
             self.plugin_inbox
                 .borrow_mut()
@@ -262,6 +286,20 @@ pub mod fake {
                 }),
                 incoming,
             })
+        }
+        fn create_plugin(&self, name: &str) -> Result<Manifest, String> {
+            let manifest = Manifest {
+                id: name.to_lowercase().replace(' ', "-"),
+                name: name.into(),
+                icon: "sparkles".into(),
+                width: 280.0,
+                height: None,
+                settings: Vec::new(),
+                dir: PathBuf::from(format!("/plugins/{}", name.to_lowercase())),
+                main: PathBuf::from("index.tsx"),
+            };
+            self.plugins.borrow_mut().push(manifest.clone());
+            Ok(manifest)
         }
     }
 }

@@ -11,15 +11,22 @@ use crate::{
     views,
 };
 use gpui_kit::{
-    AnyElement, App, DefiniteLength, ElementId, Entity, FontWeight, Hsla, InteractiveElement as _,
-    IntoElement, Length, ObjectFit, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, TestSupportExt as _, auto,
-    component::{Disableable as _, Sizable as _, switch::Switch},
+    AnyElement, App, AppContext as _, Context, DefiniteLength, ElementId, Entity, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled, StyledImage as _, Subscription, TestSupportExt as _,
+    Window, auto,
+    base::{Spring, Transition, spring, transition},
+    component::{
+        Disableable as _, Sizable as _,
+        input::{Input, InputEvent, InputState},
+        switch::Switch,
+    },
     div, img,
     prelude::FluentBuilder as _,
     px, relative, rgba, svg,
 };
 use serde_json::{Map, Value};
+use std::{borrow::Cow, time::Duration};
 
 type Props = Map<String, Value>;
 
@@ -33,15 +40,21 @@ pub struct Surface {
 
 impl Surface {
     /// Draws `nodes`; `root` names the surface, e.g. `"card"`.
-    pub fn render(&self, nodes: &[Node], root: &str) -> Vec<AnyElement> {
+    pub fn render(
+        &self,
+        nodes: &[Node],
+        root: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<AnyElement> {
         nodes
             .iter()
             .enumerate()
-            .map(|(index, node)| self.node(node, &format!("{root}/{index}")))
+            .map(|(index, node)| self.node(node, &format!("{root}/{index}"), window, cx))
             .collect()
     }
 
-    fn node(&self, node: &Node, path: &str) -> AnyElement {
+    fn node(&self, node: &Node, path: &str, window: &mut Window, cx: &mut App) -> AnyElement {
         let Node::Element {
             kind,
             props,
@@ -53,10 +66,15 @@ impl Surface {
             };
             return text.clone().into_any_element();
         };
-        let children = || self.render(children, path);
+        let animated = self.animate(props, path, window, cx);
+        let props = animated.as_ref();
+        if kind == "Input" {
+            return self.input(props, path, window, cx);
+        }
+        let children = self.render(children, path, window, cx);
         let palette = self.palette;
         match kind.as_str() {
-            "div" => self.div(props, path, children()),
+            "div" => self.div(props, path, children),
             "svg" => style(
                 svg()
                     .path(icon_path(string(props, "path").unwrap_or("circle")))
@@ -100,14 +118,14 @@ impl Surface {
                     views::card_body()
                         .gap(px(8.0))
                         .children(heading)
-                        .children(children()),
+                        .children(children),
                     props,
                     palette,
                 )
                 .into_any_element()
             }
             "Title" => {
-                style(views::title("").children(children()), props, palette).into_any_element()
+                style(views::title("").children(children), props, palette).into_any_element()
             }
             "Text" => {
                 let (size, weight) = match string(props, "variant") {
@@ -130,7 +148,7 @@ impl Surface {
                         .text_size(px(size))
                         .font_weight(weight)
                         .text_color(color)
-                        .children(children()),
+                        .children(children),
                     props,
                     palette,
                 )
@@ -150,7 +168,7 @@ impl Surface {
                 )
                 .into_any_element()
             }
-            "Button" => self.button(props, path, children()),
+            "Button" => self.button(props, path, children),
             "Switch" => {
                 let (dock, plugin) = (self.dock.clone(), self.plugin.clone());
                 let handler = handler(props, "on_change");
@@ -220,7 +238,7 @@ impl Surface {
                     .justify_between()
                     .text_size(px(text::SUBHEADLINE))
                     .text_color(palette.tertiary)
-                    .children(children()),
+                    .children(children),
                 props,
                 palette,
             )
@@ -239,7 +257,7 @@ impl Surface {
                     .justify_center()
                     .text_size(px(text::SUBHEADLINE))
                     .font_weight(FontWeight::MEDIUM)
-                    .children(children()),
+                    .children(children),
                 props,
                 palette,
             )
@@ -257,7 +275,7 @@ impl Surface {
             "Spacer" => style(div().flex_1(), props, palette).into_any_element(),
             // An unknown tag still shows its children.
             _ => style(div(), props, palette)
-                .children(children())
+                .children(children)
                 .into_any_element(),
         }
     }
@@ -265,12 +283,131 @@ impl Surface {
     /// An element id that stays put across renders: the plugin's own `id`
     /// prop when it gave one, else the node's place in the tree.
     fn id(&self, props: &Props, path: &str) -> ElementId {
+        ElementId::Name(self.key(props, path).into())
+    }
+
+    fn key(&self, props: &Props, path: &str) -> String {
         let local = match props.get("id") {
             Some(Value::String(id)) => id.clone(),
             Some(Value::Number(id)) => id.to_string(),
             _ => path.to_string(),
         };
-        ElementId::Name(format!("plugin:{}:{local}", self.plugin).into())
+        format!("plugin:{}:{local}", self.plugin)
+    }
+
+    /// With a `transition` prop, numeric style props ease or spring toward
+    /// their new values instead of jumping to them.
+    fn animate<'a>(
+        &self,
+        props: &'a Props,
+        path: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Cow<'a, Props> {
+        let (duration, springy) = match props.get("transition") {
+            Some(Value::Number(ms)) => (ms.as_f64().unwrap_or(250.0), false),
+            Some(Value::Bool(true)) => (250.0, false),
+            Some(Value::Object(policy)) => (
+                policy
+                    .get("duration")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(350.0),
+                policy
+                    .get("spring")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
+            _ => return Cow::Borrowed(props),
+        };
+        let duration = Duration::from_millis(duration.clamp(0.0, 5000.0) as u64);
+        let key = self.key(props, path);
+        let mut animated = props.clone();
+        for name in ANIMATABLE {
+            let (target, percent) = match props.get(*name) {
+                Some(Value::Number(n)) => (n.as_f64().unwrap_or(0.0) as f32, false),
+                Some(Value::String(text)) => match text.strip_suffix('%').map(str::parse::<f32>) {
+                    Some(Ok(n)) => (n, true),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            let channel = SharedString::from(format!("{key}:{name}"));
+            let now = if springy {
+                spring(
+                    channel,
+                    target,
+                    Spring::new(duration).with_damping(0.8),
+                    window,
+                    cx,
+                )
+            } else {
+                transition(
+                    channel,
+                    target,
+                    Transition::new(duration).ease(|t| 1.0 - (1.0 - t).powi(3)),
+                    window,
+                    cx,
+                )
+            };
+            let value = if percent {
+                Value::from(format!("{now}%"))
+            } else {
+                Value::from(now)
+            };
+            animated.insert((*name).to_string(), value);
+        }
+        Cow::Owned(animated)
+    }
+
+    fn input(&self, props: &Props, path: &str, window: &mut Window, cx: &mut App) -> AnyElement {
+        let palette = self.palette;
+        let placeholder = string(props, "placeholder").unwrap_or_default().to_string();
+        let masked = flag(props, "secret");
+        let key = self.key(props, path);
+        let field = window.use_keyed_state(
+            ElementId::Name(format!("{key}:field").into()),
+            cx,
+            |window, cx| PluginInput::new(placeholder, masked, window, cx),
+        );
+        let (dock, plugin) = (self.dock.clone(), self.plugin.clone());
+        let (change, submit) = (handler(props, "on_change"), handler(props, "on_submit"));
+        let value = string(props, "value").map(str::to_string);
+        field.update(cx, |field, cx| {
+            field.target = Some((dock, plugin));
+            field.on_change = change;
+            field.on_submit = submit;
+            // Only a change the plugin makes replaces the text, so its
+            // slightly stale `value` never undoes typing.
+            if value != field.value_prop {
+                field.value_prop = value.clone();
+                if let Some(value) = value {
+                    field
+                        .state
+                        .update(cx, |state, cx| state.set_value(value, window, cx));
+                }
+            }
+        });
+        let state = field.read(cx).state.clone();
+        style(
+            div()
+                .id(ElementId::Name(key.into()))
+                .test_support()
+                .h(px(28.0))
+                .px(px(8.0))
+                .rounded(px(7.0))
+                .bg(palette.fill)
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .children(
+                    string(props, "icon")
+                        .map(|name| views::icon(icon_path(name).into(), 14.0, palette.secondary)),
+                )
+                .child(Input::new(&state).appearance(false)),
+            props,
+            palette,
+        )
+        .into_any_element()
     }
 
     fn div(&self, props: &Props, path: &str, children: Vec<AnyElement>) -> AnyElement {
@@ -279,14 +416,26 @@ impl Surface {
         let hover = handler(props, "on_hover");
         let hover_style = props.get("hover").and_then(Value::as_object).cloned();
         let active_style = props.get("active").and_then(Value::as_object).cloned();
+        let scroll_y = flag(props, "overflow_y_scroll");
+        let scroll_x = flag(props, "overflow_x_scroll");
         let base = style(div(), props, palette).children(children);
-        if click.is_none() && hover.is_none() && hover_style.is_none() && active_style.is_none() {
+        // An explicit `id` makes the element findable and keeps its state.
+        if !props.contains_key("id")
+            && click.is_none()
+            && hover.is_none()
+            && hover_style.is_none()
+            && active_style.is_none()
+            && !scroll_y
+            && !scroll_x
+        {
             return base.into_any_element();
         }
         let (dock, plugin) = (self.dock.clone(), self.plugin.clone());
         let (hover_dock, hover_plugin) = (dock.clone(), plugin.clone());
         base.id(self.id(props, path))
             .test_support()
+            .when(scroll_y, |el| el.overflow_y_scroll())
+            .when(scroll_x, |el| el.overflow_x_scroll())
             .when_some(hover_style, |el, hovered| {
                 el.hover(move |s| style(s, &hovered, palette))
             })
@@ -499,6 +648,83 @@ impl Surface {
                     .into_any_element()
             }
             None => row.into_any_element(),
+        }
+    }
+}
+
+/// Style props a `transition` animates.
+const ANIMATABLE: &[&str] = &[
+    "w",
+    "h",
+    "size",
+    "min_w",
+    "min_h",
+    "max_w",
+    "max_h",
+    "gap",
+    "gap_x",
+    "gap_y",
+    "p",
+    "px",
+    "py",
+    "pt",
+    "pr",
+    "pb",
+    "pl",
+    "m",
+    "mx",
+    "my",
+    "mt",
+    "mr",
+    "mb",
+    "ml",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "opacity",
+    "rounded",
+    "text_size",
+];
+
+/// A plugin's text field: its text and cursor live here, across renders,
+/// and every edit goes to the plugin's handlers.
+struct PluginInput {
+    state: Entity<InputState>,
+    target: Option<(Entity<Dock>, SharedString)>,
+    on_change: Option<SharedString>,
+    on_submit: Option<SharedString>,
+    /// The `value` prop as last rendered.
+    value_prop: Option<String>,
+    _subscription: Subscription,
+}
+
+impl PluginInput {
+    fn new(placeholder: String, masked: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(placeholder)
+                .masked(masked)
+        });
+        let subscription =
+            cx.subscribe_in(&state, window, |this, state, event: &InputEvent, _, cx| {
+                let handler = match event {
+                    InputEvent::Change => this.on_change.clone(),
+                    InputEvent::PressEnter { .. } => this.on_submit.clone(),
+                    _ => None,
+                };
+                let text = state.read(cx).unmask_value().to_string();
+                if let (Some(handler), Some((dock, plugin))) = (handler, this.target.clone()) {
+                    send(&dock, &plugin, &handler, Value::from(text), cx);
+                }
+            });
+        Self {
+            state,
+            target: None,
+            on_change: None,
+            on_submit: None,
+            value_prop: None,
+            _subscription: subscription,
         }
     }
 }

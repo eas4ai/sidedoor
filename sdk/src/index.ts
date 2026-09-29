@@ -1,6 +1,7 @@
 export * from "./components";
-export { sidekick, widget } from "./host";
+export { sidekick, useCardOpen, useSetting, widget } from "./host";
 export type { HostMessage, PluginMessage, WidgetDefinition } from "./host";
+export type { Patch } from "./runtime";
 export { Fragment } from "./jsx-runtime";
 export {
   createStore,
