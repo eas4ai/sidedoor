@@ -83,19 +83,28 @@ See [`examples/plugins/pomodoro`](examples/plugins/pomodoro) for a full widget w
 
 ## Sharing a plugin
 
-Push the plugin's folder to a public GitHub repository. Others paste its link
-into **Settings › Plugins › Install from GitHub**:
+Put the plugin's folder somewhere others can reach, and they paste its link
+into **Settings › Plugins › Install from URL**:
 
-- `github.com/you/timer` when the plugin is the whole repository.
-- `github.com/you/widgets/tree/main/timer` for one plugin in a repository of
-  several. A link to the repository finds a plugin in its top two levels of
-  folders, and names the choices when there are several.
+- A GitHub repository: `github.com/you/timer`, or `you/timer` for short.
+- Any other Git repository, on GitLab, Codeberg, Bitbucket or your own server:
+  its web link or clone URL, such as `https://git.example.com/team/timer` or
+  `git@git.example.com:team/timer.git`. These are cloned with Git, so private
+  repositories work when `git clone` does in Terminal. On a Mac this needs
+  Apple's command line tools (`xcode-select --install`); on Windows, Git from
+  git-scm.com.
+- One plugin in a repository of several: the link to its folder, as the
+  host shows it, like `github.com/you/widgets/tree/main/timer` or
+  `gitlab.com/you/widgets/-/tree/main/timer`. A link to the repository finds
+  a plugin in its top two levels of folders, and names the choices when there
+  are several.
+- A `.zip` or `.tar.gz` file on any web server.
 
-The app downloads the newest commit, asks whether to trust the plugin, then
+The app downloads the newest version, asks whether to trust the plugin, then
 installs it and puts it in the dock. **Check for Updates** under the plugin
-installs a newer commit in place, keeping its dock place, settings and saved
-data. The app writes where a plugin came from to `.sidedoor-source.json` in its
-folder.
+installs a newer commit (or a changed file) in place, keeping its dock place,
+settings and saved data. The app writes where a plugin came from to
+`.sidedoor-source.json` in its folder.
 
 A `package.json` with `dependencies` is installed with
 `bun install --production --ignore-scripts`. `@sidedoor/sdk` needn't be listed;

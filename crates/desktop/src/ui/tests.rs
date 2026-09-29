@@ -1629,7 +1629,7 @@ impl SettingsHarness {
 }
 
 #[gpui_kit::test]
-fn plugins_install_from_github_after_asking(cx: &mut TestAppContext) {
+fn plugins_install_from_links_after_asking(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![]);
     let commit = "a".repeat(40);
     h.platform
@@ -1637,9 +1637,9 @@ fn plugins_install_from_github_after_asking(cx: &mut TestAppContext) {
         .publish("lasse/notes", "Notes", &commit);
     h.press(cx, "cmd-4");
 
-    // A link that isn't GitHub's says so and downloads nothing.
-    h.type_into(cx, "github-url", "https://gitlab.com/lasse/notes");
-    h.click(cx, "install-github");
+    // Something that isn't a link says so and downloads nothing.
+    h.type_into(cx, "plugin-url", "ftp://example.com/notes");
+    h.click(cx, "install-url");
     assert!(matches!(
         cx.update(|cx| h.dock.read(cx).install.clone()),
         InstallState::Failed(_)
@@ -1647,7 +1647,7 @@ fn plugins_install_from_github_after_asking(cx: &mut TestAppContext) {
     assert!(h.platform.installer.fetched.lock().unwrap().is_empty());
 
     // Declining the trust prompt installs nothing.
-    h.type_into(cx, "github-url", "github.com/lasse/notes");
+    h.type_into(cx, "plugin-url", "github.com/lasse/notes");
     h.press(cx, "enter");
     cx.run_until_parked();
     assert!(cx.has_pending_prompt());
@@ -1659,7 +1659,7 @@ fn plugins_install_from_github_after_asking(cx: &mut TestAppContext) {
     );
     assert!(!h.installed(cx).contains(&"notes".to_string()));
 
-    h.click(cx, "install-github");
+    h.click(cx, "install-url");
     cx.run_until_parked();
     cx.simulate_prompt_answer("Install");
     cx.run_until_parked();
@@ -1682,17 +1682,39 @@ fn plugins_install_from_github_after_asking(cx: &mut TestAppContext) {
     h.click(cx, "plugin-dock:notes");
     assert!(!cx.has_pending_prompt());
     assert_eq!(h.item_ids(cx), ["plugin:notes"]);
+
+    // Other hosts install the same way, and say where they're from.
+    h.platform
+        .installer
+        .publish("gitlab.example.com/team/timer", "Timer", &commit);
+    h.type_into(cx, "plugin-url", "https://gitlab.example.com/team/timer");
+    h.click(cx, "install-url");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Install");
+    cx.run_until_parked();
+    assert_eq!(h.item_ids(cx), ["plugin:notes", "plugin:timer"]);
+    let source = cx.update(|cx| {
+        h.dock
+            .read(cx)
+            .installed_plugins()
+            .into_iter()
+            .find(|manifest| manifest.id == "timer")
+            .and_then(|manifest| manifest.source)
+            .unwrap()
+    });
+    assert_eq!(source.link.service(), "GitLab");
+    assert_eq!(source.link.label(), "gitlab.example.com/team/timer");
 }
 
 #[gpui_kit::test]
-fn plugins_from_github_update_to_the_newest_commit(cx: &mut TestAppContext) {
+fn installed_plugins_update_to_the_newest_commit(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![]);
     h.platform
         .installer
         .publish("lasse/notes", "Notes", &"a".repeat(40));
     h.press(cx, "cmd-4");
-    h.type_into(cx, "github-url", "lasse/notes");
-    h.click(cx, "install-github");
+    h.type_into(cx, "plugin-url", "lasse/notes");
+    h.click(cx, "install-url");
     cx.run_until_parked();
     cx.simulate_prompt_answer("Install");
     cx.run_until_parked();

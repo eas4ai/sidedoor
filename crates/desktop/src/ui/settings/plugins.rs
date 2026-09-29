@@ -1,4 +1,4 @@
-//! Settings › Plugins: install plugins from GitHub or start a new one, then
+//! Settings › Plugins: install plugins from a link or start a new one, then
 //! manage each: put it in the dock, change its settings, read its logs,
 //! update it, reload it or delete it.
 
@@ -22,7 +22,7 @@ use gpui_kit::{
     prelude::FluentBuilder as _,
     px, svg,
 };
-use plugin_host::{GitHub, Manifest, SettingKind, SettingSpec};
+use plugin_host::{Link, Manifest, SettingKind, SettingSpec};
 use serde_json::Value;
 use std::{collections::HashSet, time::Duration};
 
@@ -48,7 +48,7 @@ struct Expanded(HashSet<String>);
 struct Page {
     dock: Entity<Dock>,
     new_name: Entity<InputState>,
-    github: Entity<InputState>,
+    link: Entity<InputState>,
     expanded: Entity<Expanded>,
 }
 
@@ -63,26 +63,27 @@ impl Page {
             .state
             .clone();
         let expanded = window.use_keyed_state("plugins-expanded", cx, |_, _| Expanded::default());
-        let github_dock = dock.clone();
-        let github_expanded = expanded.clone();
-        let github = window
-            .use_keyed_state("github-url", cx, move |window, cx: &mut Context<Field>| {
-                let state =
-                    cx.new(|cx| InputState::new(window, cx).placeholder("github.com/owner/repo"));
+        let link_dock = dock.clone();
+        let link_expanded = expanded.clone();
+        let link = window
+            .use_keyed_state("plugin-url", cx, move |window, cx: &mut Context<Field>| {
+                let state = cx.new(|cx| {
+                    InputState::new(window, cx).placeholder("github.com/owner/repo or any Git URL")
+                });
                 // Return installs, like the button beside it.
                 let subscription = cx.subscribe_in(
                     &state,
                     window,
                     move |_, state, event: &InputEvent, window, cx| match event {
-                        InputEvent::PressEnter { .. } => install_from_github(
-                            github_dock.clone(),
+                        InputEvent::PressEnter { .. } => install_from_link(
+                            link_dock.clone(),
                             state.clone(),
-                            github_expanded.clone(),
+                            link_expanded.clone(),
                             window,
                             cx,
                         ),
                         // A new link clears the last error.
-                        InputEvent::Change => github_dock.update(cx, |dock, cx| {
+                        InputEvent::Change => link_dock.update(cx, |dock, cx| {
                             if matches!(dock.install, InstallState::Failed(_)) {
                                 dock.set_install(InstallState::Idle, cx);
                             }
@@ -101,7 +102,7 @@ impl Page {
         Self {
             dock: dock.clone(),
             new_name,
-            github,
+            link,
             expanded,
         }
     }
@@ -346,7 +347,7 @@ pub fn confirm_add(dock: Entity<Dock>, manifest: Manifest, window: &mut Window, 
 
 /// Downloads the plugin linked in `field`, asks whether to trust it, then
 /// installs it and puts it in the dock.
-fn install_from_github(
+fn install_from_link(
     dock: Entity<Dock>,
     field: Entity<InputState>,
     expanded: Entity<Expanded>,
@@ -356,7 +357,7 @@ fn install_from_github(
     if matches!(dock.read(cx).install, InstallState::Downloading(_)) {
         return;
     }
-    let source = match GitHub::parse(&field.read(cx).value()) {
+    let source = match Link::parse(&field.read(cx).value()) {
         Ok(source) => source,
         Err(message) => {
             dock.update(cx, |dock, cx| {
@@ -392,10 +393,9 @@ fn install_from_github(
                 PromptLevel::Warning,
                 &format!("Install “{}”?", staged.manifest.name),
                 Some(&format!(
-                    "From github.com/{}. Plugins run with the same access as this app: your \
-                     files, the network and other programs. Only install plugins from people \
-                     you trust.",
-                    source.label()
+                    "From {}. Plugins run with the same access as this app: your files, the \
+                     network and other programs. Only install plugins from people you trust.",
+                    source.link_text().trim_start_matches("https://")
                 )),
                 &["Install", "Cancel"],
             );
@@ -627,12 +627,16 @@ pub fn plugins_page(
     sections
 }
 
-/// Install from GitHub, start a new plugin, or open the plugins folder.
+/// Install from a link, start a new plugin, or open the plugins folder.
 fn get_plugins(page: &Page, palette: Palette, cx: &mut App) -> AnyElement {
     let install = page.dock.read(cx).install.clone();
     let downloading = matches!(install, InstallState::Downloading(_));
     let detail: SharedString = match &install {
-        InstallState::Idle => "A repository, or a folder in one that holds a plugin.".into(),
+        InstallState::Idle => {
+            "A Git repository on GitHub, GitLab or your own server, a folder in one, \
+                              or a .zip or .tar.gz file."
+                .into()
+        }
         InstallState::Downloading(label) => format!("Downloading {label}…").into(),
         InstallState::Failed(message) => message.clone(),
     };
@@ -644,7 +648,7 @@ fn get_plugins(page: &Page, palette: Palette, cx: &mut App) -> AnyElement {
             |detail| detail.text_color(palette.secondary),
         )
         .child(detail);
-    let github = page.clone();
+    let installing = page.clone();
     let install_row = div()
         .min_h(px(40.0))
         .px(px(12.0))
@@ -657,10 +661,10 @@ fn get_plugins(page: &Page, palette: Palette, cx: &mut App) -> AnyElement {
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .child(div().flex_1().child("Install from GitHub"))
-                .child(field_box("github-url", &page.github, 240.0, palette))
+                .child(div().flex_1().child("Install from URL"))
+                .child(field_box("plugin-url", &page.link, 240.0, palette))
                 .child(push_button(
-                    "install-github",
+                    "install-url",
                     if downloading {
                         "Installing…"
                     } else {
@@ -670,10 +674,10 @@ fn get_plugins(page: &Page, palette: Palette, cx: &mut App) -> AnyElement {
                     !downloading,
                     false,
                     move |window, cx| {
-                        install_from_github(
-                            github.dock.clone(),
-                            github.github.clone(),
-                            github.expanded.clone(),
+                        install_from_link(
+                            installing.dock.clone(),
+                            installing.link.clone(),
+                            installing.expanded.clone(),
                             window,
                             cx,
                         )
@@ -757,7 +761,7 @@ fn origin(manifest: &Manifest) -> String {
     if crate::builtins::contains(&manifest.id) {
         "Built-in".into()
     } else if let Some(source) = &manifest.source {
-        format!("GitHub · {}", source.github.label())
+        format!("{} · {}", source.link.service(), source.link.label())
     } else {
         "Local".into()
     }
@@ -846,7 +850,7 @@ fn plugin_row(
         .into_any_element()
 }
 
-/// Where a GitHub plugin came from, and checking it for updates.
+/// Where an installed plugin came from, and checking it for updates.
 fn source_row(
     page: &Page,
     manifest: &Manifest,
@@ -865,23 +869,23 @@ fn source_row(
     let detail = match status {
         Some(status) => format!(
             "{} · {} · {status}",
-            source.github.label(),
+            source.link.label(),
             source.short_commit()
         ),
-        None => format!("{} · {}", source.github.label(), source.short_commit()),
+        None => format!("{} · {}", source.link.label(), source.short_commit()),
     };
     let busy = matches!(update, Some(UpdateState::Checking | UpdateState::Updating));
     let (open, check) = (page.dock.clone(), page.dock.clone());
-    let url = source.github.url();
+    let url = source.link.web_url();
     let id = manifest.id.clone();
     row(
-        "GitHub",
+        source.link.service(),
         Some(detail.into()),
         div()
             .flex()
             .gap(px(8.0))
             .child(push_button(
-                SharedString::from(format!("plugin-github:{}", manifest.id)),
+                SharedString::from(format!("plugin-link:{}", manifest.id)),
                 "View",
                 palette,
                 true,

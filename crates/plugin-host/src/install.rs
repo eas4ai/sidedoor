@@ -1,129 +1,35 @@
-//! Installing plugins from GitHub: download a repository at one commit, find
-//! the plugin inside it, and move it into the plugins folder. Nothing in it
-//! runs until the user adds it to the dock.
+//! Installing plugins from a link: download a repository at one commit (or
+//! an archive), find the plugin inside it, and move it into the plugins
+//! folder. Nothing in it runs until the user adds it to the dock.
+//!
+//! GitHub downloads go through its API, so they need no Git. Other
+//! repositories are cloned with `git`, which reaches any host the user's
+//! Git can, with their credentials. Archives are plain downloads.
 
-use crate::{Manifest, sdk::slug};
+use crate::{Link, Manifest, Origin, sdk::slug};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 
 /// Kept in an installed plugin's folder: where it came from, for updates.
 pub const SOURCE_FILE: &str = ".sidedoor-source.json";
 /// Downloads stop here; a plugin is a few source files.
 const MAX_DOWNLOAD: u64 = 50 * 1024 * 1024;
+/// How long one `git` command may take before it's stopped.
+const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const API: &str = "https://api.github.com";
 
-/// A plugin on GitHub: a repository, optionally a branch or tag, and the
-/// folder in it that holds the plugin.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GitHub {
-    pub owner: String,
-    pub repo: String,
-    /// A branch, tag or commit; the default branch when missing.
-    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
-    pub reference: Option<String>,
-    /// The plugin's folder inside the repository.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-impl GitHub {
-    /// Reads what people paste: `owner/repo`, `github.com/owner/repo`, a
-    /// clone URL, or a link to a folder like `…/tree/main/plugins/timer`.
-    pub fn parse(input: &str) -> Result<Self, String> {
-        const HINT: &str = "Paste a GitHub link, like github.com/owner/repo.";
-        let mut text = input.trim().trim_end_matches('/');
-        for prefix in ["https://", "http://", "git@github.com:", "www."] {
-            text = text.strip_prefix(prefix).unwrap_or(text);
-        }
-        if text.is_empty() {
-            return Err(HINT.into());
-        }
-        let rest = match text.strip_prefix("github.com/") {
-            Some(rest) => rest,
-            // A bare `owner/repo` has no dot before its first slash.
-            None if !text.split('/').next().unwrap_or_default().contains('.') => text,
-            None => return Err("Only GitHub links can be installed.".into()),
-        };
-        let rest = rest.split(['?', '#']).next().unwrap_or_default();
-        let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
-        let [owner, repo, more @ ..] = parts.as_slice() else {
-            return Err(HINT.into());
-        };
-        let repo = repo.trim_end_matches(".git");
-        let name_ok = |name: &str| {
-            !name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        };
-        if !name_ok(owner) || !name_ok(repo) {
-            return Err(HINT.into());
-        }
-        let (reference, path) = match more {
-            [] => (None, None),
-            [kind @ ("tree" | "blob"), reference, path @ ..] => {
-                let mut path = path.to_vec();
-                // A link to a file, like …/blob/main/timer/index.tsx, means its folder.
-                if *kind == "blob" && path.last().is_some_and(|last| last.contains('.')) {
-                    path.pop();
-                }
-                if path.iter().any(|part| *part == ".." || *part == ".") {
-                    return Err(HINT.into());
-                }
-                let path = (!path.is_empty()).then(|| path.join("/"));
-                (Some((*reference).to_string()), path)
-            }
-            _ => return Err(HINT.into()),
-        };
-        Ok(Self {
-            owner: (*owner).to_string(),
-            repo: repo.to_string(),
-            reference,
-            path,
-        })
-    }
-
-    /// `owner/repo`, or `owner/repo/folder` for a plugin inside it.
-    pub fn label(&self) -> String {
-        match &self.path {
-            Some(path) => format!("{}/{}/{path}", self.owner, self.repo),
-            None => format!("{}/{}", self.owner, self.repo),
-        }
-    }
-
-    /// The page on github.com.
-    pub fn url(&self) -> String {
-        let mut url = format!("https://github.com/{}/{}", self.owner, self.repo);
-        if self.reference.is_some() || self.path.is_some() {
-            url.push_str("/tree/");
-            url.push_str(self.reference.as_deref().unwrap_or("HEAD"));
-            if let Some(path) = &self.path {
-                url.push('/');
-                url.push_str(path);
-            }
-        }
-        url
-    }
-
-    /// Whether both name the same plugin, on any branch.
-    pub fn same_plugin(&self, other: &Self) -> bool {
-        self.owner.eq_ignore_ascii_case(&other.owner)
-            && self.repo.eq_ignore_ascii_case(&other.repo)
-            && self.path == other.path
-    }
-}
-
-/// Where an installed plugin came from, and at which commit.
+/// Where an installed plugin came from, and which version of it this is:
+/// the commit for a repository, a digest of the file for an archive.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     #[serde(flatten)]
-    pub github: GitHub,
+    pub link: Link,
     pub commit: String,
 }
 
@@ -137,7 +43,7 @@ impl Source {
         fs::write(dir.join(SOURCE_FILE), json)
     }
 
-    /// The commit as GitHub shows it, e.g. `3f2a9c1`.
+    /// The version as Git hosts show commits, e.g. `3f2a9c1`.
     pub fn short_commit(&self) -> &str {
         self.commit.get(..7).unwrap_or(&self.commit)
     }
@@ -164,49 +70,66 @@ impl Drop for Staged {
 
 /// Downloads plugins; blocking, so the app calls it off the main thread.
 pub trait Installer: Send + Sync {
-    /// Downloads `source` at its newest commit and gets it ready to install.
-    fn fetch(&self, source: &GitHub) -> Result<Staged, String>;
-    /// The newest commit of `source`, to tell whether an update exists.
-    fn latest_commit(&self, source: &GitHub) -> Result<String, String>;
+    /// Downloads `link` at its newest version and gets it ready to install.
+    fn fetch(&self, link: &Link) -> Result<Staged, String>;
+    /// The newest version of `link`, to tell whether an update exists.
+    fn latest_commit(&self, link: &Link) -> Result<String, String>;
 }
 
-/// Downloads from GitHub into a folder beside the plugins, so installing
-/// is a rename.
-pub struct GitHubInstaller {
+/// Downloads into a folder beside the plugins, so installing is a rename.
+pub struct Downloader {
     pub plugins: PathBuf,
     /// Installs a plugin's npm dependencies, when it has any.
     pub bun: Option<PathBuf>,
 }
 
-impl Installer for GitHubInstaller {
-    fn fetch(&self, source: &GitHub) -> Result<Staged, String> {
-        let commit = self.latest_commit(source)?;
-        let url = format!(
-            "{API}/repos/{}/{}/tarball/{commit}",
-            source.owner, source.repo
-        );
-        let response = agent()
-            .get(&url)
-            .call()
-            .map_err(|err| describe(err, source))?;
+impl Installer for Downloader {
+    fn fetch(&self, link: &Link) -> Result<Staged, String> {
         let root = staging_dir(&self.plugins).map_err(|err| err.to_string())?;
         // Removes the download if anything below fails.
         let cleanup = Cleanup(root.clone());
-        unpack(response.into_reader(), &root)
-            .map_err(|err| format!("Couldn't unpack {}: {err}", source.label()))?;
-        let dir = locate(&root, source)?;
+        let commit = match &link.origin {
+            Origin::GitHub { owner, repo } => {
+                let commit = self.latest_commit(link)?;
+                let url = format!("{API}/repos/{owner}/{repo}/tarball/{commit}");
+                let response = agent()
+                    .get(&url)
+                    .call()
+                    .map_err(|err| describe(err, link))?;
+                unpack(response.into_reader(), &root)
+                    .map_err(|err| format!("Couldn't unpack {}: {err}", link.label()))?;
+                commit
+            }
+            Origin::Git { git } => clone(git, link, &root.join("repo"))?,
+            Origin::Archive { archive } => {
+                let bytes = download(archive, link)?;
+                let lower = archive
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_lowercase();
+                if lower.ends_with(".zip") {
+                    unzip(&bytes, &root)
+                } else {
+                    unpack(&bytes[..], &root)
+                }
+                .map_err(|err| format!("Couldn't unpack {}: {err}", link.name()))?;
+                digest(&bytes)
+            }
+        };
+        let (top, dir) = locate(&root, link)?;
         install_dependencies(&dir, self.bun.as_deref())?;
         let manifest = Manifest::read(&dir).ok_or("The plugin can't be read.")?;
-        let id = slug(if dir.parent() == Some(root.as_path()) {
-            &source.repo
+        let id = slug(&if dir == top {
+            link.name()
         } else {
-            &manifest.id
+            manifest.id.clone()
         });
         std::mem::forget(cleanup);
         Ok(Staged {
             manifest,
             source: Source {
-                github: source.clone(),
+                link: link.clone(),
                 commit,
             },
             id,
@@ -214,24 +137,28 @@ impl Installer for GitHubInstaller {
         })
     }
 
-    fn latest_commit(&self, source: &GitHub) -> Result<String, String> {
-        let reference = source.reference.as_deref().unwrap_or("HEAD");
-        let url = format!(
-            "{API}/repos/{}/{}/commits/{reference}",
-            source.owner, source.repo
-        );
-        let sha = agent()
-            .get(&url)
-            .set("Accept", "application/vnd.github.sha")
-            .call()
-            .map_err(|err| describe(err, source))?
-            .into_string()
-            .map_err(|err| format!("Couldn't read GitHub's answer: {err}"))?;
-        let sha = sha.trim();
-        if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err("GitHub didn't say which commit is newest.".into());
+    fn latest_commit(&self, link: &Link) -> Result<String, String> {
+        match &link.origin {
+            Origin::GitHub { owner, repo } => {
+                let reference = link.reference.as_deref().unwrap_or("HEAD");
+                let url = format!("{API}/repos/{owner}/{repo}/commits/{reference}");
+                let sha = agent()
+                    .get(&url)
+                    .set("Accept", "application/vnd.github.sha")
+                    .call()
+                    .map_err(|err| describe(err, link))?
+                    .into_string()
+                    .map_err(|err| format!("Couldn't read GitHub's answer: {err}"))?;
+                let sha = sha.trim();
+                if !is_commit(sha) {
+                    return Err("GitHub didn't say which commit is newest.".into());
+                }
+                Ok(sha.to_string())
+            }
+            Origin::Git { git } => latest_remote_commit(git, link),
+            // A file has no commits; its contents are its version.
+            Origin::Archive { archive } => Ok(digest(&download(archive, link)?)),
         }
-        Ok(sha.to_string())
     }
 }
 
@@ -243,6 +170,10 @@ impl Drop for Cleanup {
     }
 }
 
+fn is_commit(text: &str) -> bool {
+    text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
@@ -251,18 +182,47 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-fn describe(err: ureq::Error, source: &GitHub) -> String {
+fn describe(err: ureq::Error, link: &Link) -> String {
+    let service = match link.origin {
+        Origin::GitHub { .. } => "GitHub",
+        _ => "The server",
+    };
     match err {
         ureq::Error::Status(404 | 422, _) => format!(
-            "Couldn't find {} on GitHub. Check the link, and that the repository is public.",
-            source.url().trim_start_matches("https://")
+            "Couldn't find {}. Check the link, and that it's public.",
+            link.label()
         ),
-        ureq::Error::Status(403 | 429, _) => {
+        ureq::Error::Status(403 | 429, _) if service == "GitHub" => {
             "GitHub is limiting downloads right now. Try again in a few minutes.".into()
         }
-        ureq::Error::Status(code, _) => format!("GitHub answered with an error ({code})."),
-        ureq::Error::Transport(err) => format!("Couldn't reach GitHub: {err}"),
+        ureq::Error::Status(401 | 403, _) => format!("{} needs a login to download.", link.label()),
+        ureq::Error::Status(code, _) => format!("{service} answered with an error ({code})."),
+        ureq::Error::Transport(err) => format!("Couldn't download {}: {err}", link.label()),
     }
+}
+
+/// Reads a whole download into memory, up to the size limit.
+fn download(url: &str, link: &Link) -> Result<Vec<u8>, String> {
+    let response = agent().get(url).call().map_err(|err| describe(err, link))?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .take(MAX_DOWNLOAD + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("Couldn't download {}: {err}", link.label()))?;
+    if bytes.len() as u64 > MAX_DOWNLOAD {
+        return Err("The download is larger than 50 MB.".into());
+    }
+    Ok(bytes)
+}
+
+/// A file's version: the SHA-256 of its bytes, in hex.
+fn digest(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// A new, empty folder under `plugins/.installing`. The dot keeps it out of
@@ -290,39 +250,316 @@ pub(crate) fn unpack(reader: impl Read, root: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Unpacks a zip file into `root`. Entries that would land outside it, and
+/// links, are skipped.
+pub(crate) fn unzip(bytes: &[u8], root: &Path) -> io::Result<()> {
+    let mut archive = zip::ZipArchive::new(io::Cursor::new(bytes)).map_err(io::Error::other)?;
+    let mut written = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(io::Error::other)?;
+        let Some(relative) = entry.enclosed_name() else {
+            continue;
+        };
+        let target = root.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&target)?;
+            continue;
+        }
+        if entry.is_symlink() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = fs::File::create(&target)?;
+        written += io::copy(
+            &mut (&mut entry).take(MAX_DOWNLOAD - written + 1),
+            &mut file,
+        )?;
+        if written > MAX_DOWNLOAD {
+            return Err(io::Error::other("the unpacked files are larger than 50 MB"));
+        }
+    }
+    Ok(())
+}
+
+// MARK: Git
+
+/// Git, where apps opened from Finder can find it. On a Mac without the
+/// developer tools, `/usr/bin/git` only offers to install them, so it
+/// counts only once they're there.
+fn find_git() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("SIDEDOOR_GIT") {
+        return Some(PathBuf::from(path));
+    }
+    #[cfg(target_os = "windows")]
+    let candidates = {
+        let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|dir| dir.join("git.exe"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for base in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Some(base) = std::env::var_os(base) {
+                candidates.push(PathBuf::from(&base).join("Git/cmd/git.exe"));
+                candidates.push(PathBuf::from(base).join("Programs/Git/cmd/git.exe"));
+            }
+        }
+        candidates
+    };
+    #[cfg(not(target_os = "windows"))]
+    let candidates = {
+        let mut candidates = vec![
+            PathBuf::from("/opt/homebrew/bin/git"),
+            PathBuf::from("/usr/local/bin/git"),
+        ];
+        let developer_tools = Command::new("/usr/bin/xcode-select")
+            .arg("-p")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if developer_tools || !cfg!(target_os = "macos") {
+            candidates.push(PathBuf::from("/usr/bin/git"));
+        }
+        candidates
+    };
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn missing_git(link: &Link) -> String {
+    let fix = if cfg!(target_os = "windows") {
+        "Install Git from git-scm.com"
+    } else {
+        "Install Apple's command line tools by running `xcode-select --install` in Terminal"
+    };
+    format!(
+        "Installing from {} needs Git. {fix}, then try again.",
+        link.service()
+    )
+}
+
+/// Runs `git` with `args` and returns what it printed. It never waits for a
+/// password: a repository that needs one must already work in Terminal.
+fn git(args: &[&str], link: &Link) -> Result<String, String> {
+    let git = find_git().ok_or_else(|| missing_git(link))?;
+    let mut command = Command::new(git);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("Couldn't run Git: {err}"))?;
+    // Read both pipes as they fill, so a chatty Git can't block.
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let stdout = read(child.stdout.take().map(|pipe| Box::new(pipe) as _));
+    let stderr = read(child.stderr.take().map(|pipe| Box::new(pipe) as _));
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() > GIT_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{} took too long to answer.", link.label()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(err) => return Err(format!("Couldn't run Git: {err}")),
+        }
+    };
+    let (stdout, stderr) = (
+        stdout.join().unwrap_or_default(),
+        stderr.join().unwrap_or_default(),
+    );
+    if status.success() {
+        Ok(stdout)
+    } else {
+        Err(explain_git(&stderr, link))
+    }
+}
+
+/// Git's complaint in a sentence people can act on.
+fn explain_git(stderr: &str, link: &Link) -> String {
+    let lower = stderr.to_lowercase();
+    let label = link.label();
+    if lower.contains("could not resolve host") || lower.contains("could not connect") {
+        format!("Couldn't reach {label}. Check the link and your connection.")
+    } else if lower.contains("remote branch") && lower.contains("not found") {
+        format!(
+            "{label} has no branch or tag “{}”.",
+            link.reference.as_deref().unwrap_or_default()
+        )
+    } else if lower.contains("authentication failed")
+        || lower.contains("could not read username")
+        || lower.contains("permission denied")
+        || lower.contains("terminal prompts disabled")
+        || lower.contains("host key verification failed")
+    {
+        // Hosts answer a missing repository like a private one.
+        format!(
+            "Couldn't open {label}. Check the link. If it's private, make sure \
+             `git clone {}` works in Terminal, then try again.",
+            link.web_url()
+        )
+    } else if lower.contains("not found")
+        || lower.contains("does not appear to be a git repository")
+        || lower.contains("does not exist")
+    {
+        format!("Couldn't find {label}. Check the link, and that you can see it.")
+    } else {
+        let reason = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("Git failed")
+            .trim()
+            .trim_start_matches("fatal: ");
+        format!("Couldn't download {label}: {reason}")
+    }
+}
+
+/// The commit `link`'s branch or tag points at, without downloading it.
+fn latest_remote_commit(url: &str, link: &Link) -> Result<String, String> {
+    let reference = link.reference.as_deref().unwrap_or("HEAD");
+    if is_commit(reference) {
+        return Ok(reference.to_string());
+    }
+    let output = git(&["ls-remote", "--", url, reference], link)?;
+    let refs: Vec<(&str, &str)> = output
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .collect();
+    // A tag's own line points at the tag; `^{}` is the commit it names.
+    refs.iter()
+        .find(|(_, name)| name.ends_with("^{}"))
+        .or_else(|| refs.first())
+        .map(|(sha, _)| sha.to_string())
+        .filter(|sha| is_commit(sha))
+        .ok_or_else(|| format!("{} has no branch or tag “{reference}”.", link.label()))
+}
+
+/// Clones the newest commit of `link` into `into`, without its history, and
+/// returns that commit.
+fn clone(url: &str, link: &Link, into: &Path) -> Result<String, String> {
+    let into_text = into.to_string_lossy();
+    match link.reference.as_deref() {
+        Some(commit) if is_commit(commit) => {
+            git(&["init", "--quiet", &into_text], link)?;
+            git(
+                &[
+                    "-C", &into_text, "fetch", "--quiet", "--depth", "1", "--", url, commit,
+                ],
+                link,
+            )?;
+            git(
+                &["-C", &into_text, "checkout", "--quiet", "FETCH_HEAD"],
+                link,
+            )?;
+        }
+        Some(reference) => {
+            git(
+                &[
+                    "clone",
+                    "--quiet",
+                    "--depth",
+                    "1",
+                    "--single-branch",
+                    "--branch",
+                    reference,
+                    "--",
+                    url,
+                    &into_text,
+                ],
+                link,
+            )?;
+        }
+        None => {
+            git(
+                &["clone", "--quiet", "--depth", "1", "--", url, &into_text],
+                link,
+            )?;
+        }
+    }
+    let commit = git(&["-C", &into_text, "rev-parse", "HEAD"], link)?
+        .trim()
+        .to_string();
+    // The plugin is its files; Git's own folder only takes space.
+    let _ = fs::remove_dir_all(into.join(".git"));
+    if !is_commit(&commit) {
+        return Err(format!(
+            "Git didn't say which commit {} is at.",
+            link.label()
+        ));
+    }
+    Ok(commit)
+}
+
+// MARK: Finding the plugin
+
 fn is_plugin_dir(entry: &fs::DirEntry) -> bool {
     let name = entry.file_name();
     let name = name.to_string_lossy();
     entry.file_type().is_ok_and(|kind| kind.is_dir())
         && !name.starts_with('.')
         && name != "node_modules"
+        && name != "__MACOSX"
 }
 
-/// The plugin folder in an unpacked repository.
-pub(crate) fn locate(root: &Path, source: &GitHub) -> Result<PathBuf, String> {
-    // GitHub's tarballs hold one folder, named like "owner-repo-3f2a9c1".
-    let top = fs::read_dir(root)
+/// The top of an unpacked download, and the plugin folder in it. A download
+/// that holds just one folder, as repository archives and clones do, starts
+/// in that folder.
+pub(crate) fn locate(root: &Path, link: &Link) -> Result<(PathBuf, PathBuf), String> {
+    let entries: Vec<fs::DirEntry> = fs::read_dir(root)
         .map_err(|err| err.to_string())?
         .flatten()
-        .find(is_plugin_dir)
-        .map(|entry| entry.path())
-        .ok_or("The download was empty.")?;
-    let base = match &source.path {
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && name != "__MACOSX"
+        })
+        .collect();
+    let top = match entries.as_slice() {
+        [] => return Err("The download was empty.".into()),
+        [only] if is_plugin_dir(only) => only.path(),
+        _ => root.to_path_buf(),
+    };
+    let base = match &link.path {
         Some(path) => top.join(path),
         None => top.clone(),
     };
     if !base.is_dir() {
         return Err(format!(
-            "{}/{} has no folder “{}”.",
-            source.owner,
-            source.repo,
-            source.path.as_deref().unwrap_or_default()
+            "{} has no folder “{}”.",
+            Link {
+                path: None,
+                ..link.clone()
+            }
+            .label(),
+            link.path.as_deref().unwrap_or_default()
         ));
     }
     if Manifest::read(&base).is_some() {
-        return Ok(base);
+        return Ok((top, base));
     }
-    // Look a couple of levels down, as in a repo of several plugins.
+    // Look a couple of levels down, as in a repository of several plugins.
     let mut found = Vec::new();
     let mut folders = vec![(base.clone(), 0)];
     while let Some((dir, depth)) = folders.pop() {
@@ -342,9 +579,9 @@ pub(crate) fn locate(root: &Path, source: &GitHub) -> Result<PathBuf, String> {
         [] => Err(format!(
             "There's no Sidedoor plugin in {}. A plugin is a folder with an index.tsx \
              that calls definePlugin.",
-            source.label()
+            link.label()
         )),
-        [only] => Ok(only.clone()),
+        [only] => Ok((top, only.clone())),
         several => {
             let relative = |path: &PathBuf| {
                 path.strip_prefix(&top)
@@ -353,16 +590,23 @@ pub(crate) fn locate(root: &Path, source: &GitHub) -> Result<PathBuf, String> {
                     .replace('\\', "/")
             };
             let names: Vec<String> = several.iter().map(relative).collect();
-            let example = GitHub {
-                reference: source.reference.clone(),
-                path: Some(names[0].clone()),
-                ..source.clone()
+            let choose = match &link.origin {
+                Origin::Archive { .. } => "Download one of them on its own.".to_string(),
+                _ => {
+                    let example = Link {
+                        path: Some(names[0].clone()),
+                        ..link.clone()
+                    };
+                    format!(
+                        "Paste the link to the one you want, like {}.",
+                        example.link_text().trim_start_matches("https://")
+                    )
+                }
             };
             Err(format!(
-                "{} has several plugins: {}. Paste the link to the one you want, like {}.",
-                source.label(),
+                "{} has several plugins: {}. {choose}",
+                link.label(),
                 names.join(", "),
-                example.url().trim_start_matches("https://")
             ))
         }
     }
@@ -421,7 +665,7 @@ pub fn install(staged: Staged, plugins: &Path) -> io::Result<Manifest> {
         if !target.exists() {
             break false;
         }
-        if Source::read(&target).is_some_and(|old| old.github.same_plugin(&staged.source.github)) {
+        if Source::read(&target).is_some_and(|old| old.link.same_plugin(&staged.source.link)) {
             break true;
         }
         target = plugins.join(format!("{}-{n}", staged.id));
@@ -446,74 +690,15 @@ pub fn install(staged: Staged, plugins: &Path) -> io::Result<Manifest> {
 mod tests {
     use super::*;
 
-    fn github(owner: &str, repo: &str, reference: Option<&str>, path: Option<&str>) -> GitHub {
-        GitHub {
-            owner: owner.into(),
-            repo: repo.into(),
+    fn github(owner: &str, repo: &str, reference: Option<&str>, path: Option<&str>) -> Link {
+        Link {
+            origin: Origin::GitHub {
+                owner: owner.into(),
+                repo: repo.into(),
+            },
             reference: reference.map(Into::into),
             path: path.map(Into::into),
         }
-    }
-
-    #[test]
-    fn parses_the_links_people_paste() {
-        let plain = github("lasse", "timer", None, None);
-        for input in [
-            "lasse/timer",
-            "github.com/lasse/timer",
-            "https://github.com/lasse/timer",
-            "https://www.github.com/lasse/timer/",
-            "https://github.com/lasse/timer.git",
-            "git@github.com:lasse/timer.git",
-            "  https://github.com/lasse/timer?tab=readme  ",
-        ] {
-            assert_eq!(GitHub::parse(input), Ok(plain.clone()), "{input}");
-        }
-        assert_eq!(
-            GitHub::parse("https://github.com/lasse/widgets/tree/main/plugins/timer"),
-            Ok(github(
-                "lasse",
-                "widgets",
-                Some("main"),
-                Some("plugins/timer")
-            ))
-        );
-        assert_eq!(
-            GitHub::parse("github.com/lasse/widgets/blob/v2/timer/index.tsx"),
-            Ok(github("lasse", "widgets", Some("v2"), Some("timer")))
-        );
-        assert_eq!(
-            GitHub::parse("github.com/lasse/widgets/tree/dev"),
-            Ok(github("lasse", "widgets", Some("dev"), None))
-        );
-        for bad in [
-            "",
-            "lasse",
-            "https://gitlab.com/lasse/timer",
-            "github.com/lasse/timer/issues",
-            "github.com/lasse/timer/tree/main/../x",
-            "github.com/la sse/timer",
-        ] {
-            assert!(GitHub::parse(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn links_round_trip() {
-        let source = github("lasse", "widgets", None, Some("plugins/timer"));
-        assert_eq!(
-            source.url(),
-            "https://github.com/lasse/widgets/tree/HEAD/plugins/timer"
-        );
-        assert_eq!(GitHub::parse(&source.url()).unwrap().path, source.path);
-        assert_eq!(source.label(), "lasse/widgets/plugins/timer");
-        assert!(source.same_plugin(&github(
-            "Lasse",
-            "Widgets",
-            Some("dev"),
-            Some("plugins/timer")
-        )));
-        assert!(!source.same_plugin(&github("lasse", "widgets", None, None)));
     }
 
     const PLUGIN: &str = r#"export default definePlugin({ name: "Timer", icon: "timer" });"#;
@@ -548,12 +733,12 @@ mod tests {
         dir
     }
 
-    fn staged(root: &Path, source: GitHub, commit: &str) -> Staged {
-        let dir = locate(root, &source).unwrap();
+    fn staged(root: &Path, source: Link, commit: &str) -> Staged {
+        let (_, dir) = locate(root, &source).unwrap();
         Staged {
             manifest: Manifest::read(&dir).unwrap(),
             source: Source {
-                github: source,
+                link: source,
                 commit: commit.into(),
             },
             id: "timer".into(),
@@ -567,8 +752,9 @@ mod tests {
         let root = dir.join("root");
         fs::create_dir(&root).unwrap();
         unpack(&tarball(&[("index.tsx", PLUGIN)])[..], &root).unwrap();
-        let found = locate(&root, &github("lasse", "repo", None, None)).unwrap();
+        let (top, found) = locate(&root, &github("lasse", "repo", None, None)).unwrap();
         assert_eq!(found.file_name().unwrap(), "lasse-repo-3f2a9c1");
+        assert_eq!(top, found);
 
         let nested = dir.join("nested");
         fs::create_dir(&nested).unwrap();
@@ -591,7 +777,8 @@ mod tests {
             &nested,
             &github("lasse", "repo", None, Some("plugins/timer")),
         )
-        .unwrap();
+        .unwrap()
+        .1;
         assert!(one.ends_with("plugins/timer"));
         let missing = locate(&nested, &github("lasse", "repo", None, Some("nope"))).unwrap_err();
         assert!(missing.contains("no folder"));
@@ -644,39 +831,90 @@ mod tests {
     }
 }
 
-/// Downloads a real plugin; run with `cargo test -p plugin-host -- --ignored`.
+/// Downloads real plugins; run with `cargo test -p plugin-host -- --ignored`.
 #[cfg(test)]
 #[test]
 #[ignore = "needs the network"]
-fn downloads_a_plugin_from_github() {
-    let plugins = std::env::temp_dir().join(format!("sidedoor-github-{}", std::process::id()));
-    let installer = GitHubInstaller {
+fn downloads_plugins_from_github_git_and_archives() {
+    let plugins = std::env::temp_dir().join(format!("sidedoor-download-{}", std::process::id()));
+    let installer = Downloader {
         plugins: plugins.clone(),
         bun: None,
     };
-    let source = GitHub::parse(
-        "https://github.com/lassejlv/sidedoor/tree/main/sdk/examples/plugins/pomodoro",
-    )
-    .unwrap();
-    let staged = installer.fetch(&source).unwrap();
-    assert_eq!(staged.manifest.name, "Pomodoro");
-    assert_eq!(staged.id, "pomodoro");
+    let fetch = |link: &str| installer.fetch(&Link::parse(link).unwrap());
+
+    let staged =
+        fetch("https://github.com/lassejlv/sidedoor/tree/main/sdk/examples/plugins/pomodoro")
+            .unwrap();
+    assert_eq!(
+        (staged.manifest.name.as_str(), staged.id.as_str()),
+        ("Pomodoro", "pomodoro")
+    );
     let manifest = install(staged, &plugins).unwrap();
     assert_eq!(manifest.dir, plugins.join("pomodoro"));
     assert_eq!(manifest.source.unwrap().commit.len(), 40);
-    let root = GitHub::parse("lassejlv/sidedoor").unwrap();
     assert!(
-        installer
-            .fetch(&root)
+        fetch("lassejlv/sidedoor")
             .unwrap_err()
             .contains("no Sidedoor plugin")
     );
-    let missing = GitHub::parse("lassejlv/does-not-exist-sidedoor").unwrap();
+    assert!(
+        fetch("lassejlv/does-not-exist-sidedoor")
+            .unwrap_err()
+            .contains("Couldn't find")
+    );
+
+    // The same repository through Git, as any other host would be.
+    let link = Link {
+        origin: Origin::Git {
+            git: "https://github.com/lassejlv/sidedoor-dice.git".into(),
+        },
+        reference: None,
+        path: None,
+    };
+    let staged = installer.fetch(&link).unwrap();
+    assert_eq!(
+        (staged.manifest.name.as_str(), staged.id.as_str()),
+        ("Dice", "sidedoor-dice")
+    );
+    assert_eq!(
+        installer.latest_commit(&link).unwrap(),
+        staged.source.commit
+    );
+    assert!(!staged.manifest.dir.join(".git").exists());
+    let tagged = Link {
+        reference: Some("no-such-branch".into()),
+        ..link.clone()
+    };
+    assert!(
+        installer
+            .fetch(&tagged)
+            .unwrap_err()
+            .contains("no branch or tag")
+    );
+
+    // GitLab, cloned with Git.
+    let gitlab = Link::parse("https://gitlab.com/gitlab-org/gitlab-test").unwrap();
+    assert_eq!(gitlab.service(), "GitLab");
+    assert!(
+        installer
+            .fetch(&gitlab)
+            .unwrap_err()
+            .contains("no Sidedoor plugin")
+    );
+    let missing = Link::parse("gitlab.com/lassejlv/no-such-repo-sidedoor").unwrap();
     assert!(
         installer
             .fetch(&missing)
             .unwrap_err()
-            .contains("Couldn't find")
+            .contains("Couldn't open")
     );
+
+    // GitHub serves every repository as an archive too.
+    let staged =
+        fetch("https://github.com/lassejlv/sidedoor-dice/archive/refs/heads/main.zip").unwrap();
+    assert_eq!(staged.manifest.name, "Dice");
+    assert_eq!(staged.source.commit.len(), 64);
+    drop(staged);
     fs::remove_dir_all(plugins).unwrap();
 }

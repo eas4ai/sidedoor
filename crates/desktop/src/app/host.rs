@@ -91,7 +91,7 @@ impl Host for NativeHost {
         let bun = bun().cloned();
         #[cfg(target_os = "windows")]
         let bun = plugin_host::find_bun();
-        Arc::new(plugin_host::GitHubInstaller {
+        Arc::new(plugin_host::Downloader {
             plugins: plugin_host::plugins_dir(),
             bun,
         })
@@ -502,8 +502,8 @@ pub mod fake {
         }
     }
 
-    /// Serves plugins as if from GitHub: each repository by `owner/repo`
-    /// holds one plugin, at the commit in `commit`.
+    /// Serves plugins as if from the web: each link, by its label (such as
+    /// `owner/repo`), holds one plugin, at the commit in `commit`.
     #[derive(Default)]
     pub struct FakeInstaller {
         pub repos: std::sync::Mutex<HashMap<String, String>>,
@@ -520,7 +520,7 @@ pub mod fake {
     }
 
     impl Installer for FakeInstaller {
-        fn fetch(&self, source: &plugin_host::GitHub) -> Result<Staged, String> {
+        fn fetch(&self, source: &plugin_host::Link) -> Result<Staged, String> {
             let label = source.label();
             self.fetched.lock().unwrap().push(label.clone());
             let name = self
@@ -532,7 +532,7 @@ pub mod fake {
                 .ok_or_else(|| format!("Couldn't find {label} on GitHub."))?;
             Ok(Staged {
                 manifest: Manifest {
-                    id: source.repo.clone(),
+                    id: source.name(),
                     name,
                     icon: "puzzle".into(),
                     width: 280.0,
@@ -542,21 +542,21 @@ pub mod fake {
                     actions: Vec::new(),
                     windows: Vec::new(),
                     data: Vec::new(),
-                    dir: PathBuf::from(format!("/staging/{}", source.repo)),
+                    dir: PathBuf::from(format!("/staging/{}", source.name())),
                     main: PathBuf::from("index.tsx"),
                     source: None,
                 },
                 source: plugin_host::Source {
-                    github: source.clone(),
+                    link: source.clone(),
                     commit: self.latest_commit(source)?,
                 },
-                id: source.repo.clone(),
+                id: source.name(),
                 // Nothing on disk to clean up.
                 root: PathBuf::from("/nonexistent/sidedoor-staging"),
             })
         }
 
-        fn latest_commit(&self, _: &plugin_host::GitHub) -> Result<String, String> {
+        fn latest_commit(&self, _: &plugin_host::Link) -> Result<String, String> {
             Ok(self.commit.lock().unwrap().clone())
         }
     }

@@ -145,16 +145,16 @@ pub enum DockEvent {
 
 impl EventEmitter<DockEvent> for Dock {}
 
-/// Installing a plugin from GitHub.
+/// Installing a plugin from a link.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstallState {
     Idle,
-    /// Downloading the plugin named by this label, e.g. `owner/repo`.
+    /// Downloading the plugin at this label, e.g. `owner/repo`.
     Downloading(SharedString),
     Failed(SharedString),
 }
 
-/// Checking a GitHub plugin for a newer commit.
+/// Checking an installed plugin's link for a newer version.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateState {
     Checking,
@@ -214,7 +214,7 @@ pub struct Dock {
     open_plugin: Option<String>,
     /// Plugins the user agreed to run, by id.
     trusted: BTreeSet<String>,
-    /// The GitHub install in progress, or why the last one failed.
+    /// The install from a link in progress, or why the last one failed.
     pub install: InstallState,
     /// Update checks, by plugin id.
     pub updates: HashMap<String, UpdateState>,
@@ -1039,8 +1039,8 @@ impl Dock {
         }
     }
 
-    /// Checks a plugin installed from GitHub for a newer commit, and
-    /// installs it if there is one.
+    /// Checks an installed plugin's link for a newer version, and installs
+    /// it if there is one.
     pub fn update_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(source) = self
             .installed_plugins()
@@ -1067,20 +1067,20 @@ impl Dock {
                 })
                 .ok();
             };
-            let (check, github) = (installer.clone(), source.github.clone());
+            let (check, link) = (installer.clone(), source.link.clone());
             let latest = cx
                 .background_executor()
-                .spawn(async move { check.latest_commit(&github) })
+                .spawn(async move { check.latest_commit(&link) })
                 .await;
             match latest {
                 Ok(commit) if commit == source.commit => return set(UpdateState::UpToDate, cx),
                 Ok(_) => set(UpdateState::Updating, cx),
                 Err(message) => return set(UpdateState::Failed(message.into()), cx),
             }
-            let github = source.github.clone();
+            let link = source.link.clone();
             let fetched = cx
                 .background_executor()
-                .spawn(async move { installer.fetch(&github) })
+                .spawn(async move { installer.fetch(&link) })
                 .await;
             let installed = this.update(cx, |this, cx| {
                 let manifest = this.platform.install_plugin(fetched?)?;
