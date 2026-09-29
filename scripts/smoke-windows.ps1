@@ -2,6 +2,8 @@ param([string]$App = "$PSScriptRoot/../target/windows-bundle/Sidedoor")
 $ErrorActionPreference = "Stop"
 $App = (Resolve-Path $App).Path
 $Log = Join-Path (Split-Path $App) "smoke"
+# A restored build cache must not supply stale screenshots or a previous profile.
+if (Test-Path $Log) { Remove-Item -Recurse -Force $Log }
 New-Item -ItemType Directory -Force $Log | Out-Null
 
 # Keep CI history and settings isolated from the runner account's normal profile.
@@ -22,6 +24,7 @@ public static class SidedoorSmoke {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Bounds bounds);
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window, out Bounds bounds);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -126,13 +129,14 @@ try {
         $Width = $Bounds.Right - $Bounds.Left
         if ($Width -ge 50 -and $Width -le 150 -and $Bounds.Bottom - $Bounds.Top -gt $Width) {
             if (-not [SidedoorSmoke]::IsBorderless($Window)) { throw "Dock has an unwanted native frame" }
+            $Scale = [SidedoorSmoke]::GetDpiForWindow($Window) / 96
+            if ($Width -ne [Math]::Round(60 * $Scale)) { throw "Dock width is $Width; expected $([Math]::Round(60 * $Scale))" }
             $Dock = $Bounds
             break
         }
     }
     if (-not $Dock) { throw "Dock did not reveal at the screen edge" }
     # Stats is the final default slot; Clipboard is immediately above it.
-    $Scale = ($Dock.Right - $Dock.Left) / 60
     foreach ($Widget in @(@("stats", 34), @("clipboard", 86))) {
         [SidedoorSmoke]::SetCursorPos(($Dock.Left + $Dock.Right) / 2, $Dock.Bottom - $Widget[1] * $Scale) | Out-Null
         Start-Sleep -Seconds 2
@@ -143,6 +147,7 @@ try {
             [SidedoorSmoke]::GetWindowRect($Window, [ref]$Bounds) | Out-Null
             if ($Bounds.Right - $Bounds.Left -gt 200) {
                 if (-not [SidedoorSmoke]::IsBorderless($Window)) { throw "$($Widget[0]) card has an unwanted native frame" }
+                if ($Bounds.Right - $Bounds.Left -ne [Math]::Round(308 * $Scale)) { throw "$($Widget[0]) card width does not match its declared size" }
                 $CardFound = $true
             }
         }

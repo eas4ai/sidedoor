@@ -204,6 +204,7 @@ pub fn configure_panel(
             content.bottom - content.top,
             SWP_NOACTIVATE | SWP_NOMOVE | SWP_FRAMECHANGED,
         );
+        refresh_frame_metrics(window.hwnd);
         let mut bounds = RECT::default();
         GetClientRect(window.hwnd, &mut bounds);
         let scale = primary_display().map_or(1.0, |(_, scale)| scale);
@@ -280,6 +281,16 @@ pub fn add_window_material(window: &NativeWindow) {
             outer.bottom - outer.top + content_before.bottom - content_after.bottom,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
+        refresh_frame_metrics(window.hwnd);
+    }
+}
+
+fn refresh_frame_metrics(hwnd: HWND) {
+    // GPUI caches non-client offsets for later resize requests. Refresh its
+    // metrics after changing HWND styles, or it adds the old frame width back.
+    // This notifies only our window; it does not change any system preference.
+    unsafe {
+        SendMessageW(hwnd, WM_SETTINGCHANGE, SPI_SETNONCLIENTMETRICS as usize, 0);
     }
 }
 
