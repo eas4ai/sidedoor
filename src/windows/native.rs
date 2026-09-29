@@ -83,6 +83,51 @@ pub fn set_accessory_policy() {
 
 pub fn set_appearance(appearance: Appearance) {
     APPEARANCE.with(|value| value.set(appearance));
+    // Update native captions and backdrops alongside the shared GPUI palette.
+    unsafe {
+        EnumWindows(Some(update_appearance), 0);
+    }
+}
+
+unsafe extern "system" fn update_appearance(hwnd: HWND, _: isize) -> i32 {
+    let mut pid = 0;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, &mut pid);
+    }
+    if pid == std::process::id() {
+        apply_appearance(hwnd);
+    }
+    1
+}
+
+fn apply_appearance(hwnd: HWND) {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let mut light = 1u32;
+    let mut size = 4;
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize").as_ptr(),
+            wide("AppsUseLightTheme").as_ptr(),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            (&raw mut light).cast(),
+            &mut size,
+        );
+    }
+    let dark: i32 = APPEARANCE.with(|appearance| match appearance.get() {
+        Appearance::System => i32::from(light == 0),
+        Appearance::Light => 0,
+        Appearance::Dark => 1,
+    });
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&raw const dark).cast(),
+            4,
+        );
+    }
 }
 
 pub fn appearance(window: &gpui_kit::Window) -> gpui_kit::WindowAppearance {
@@ -162,6 +207,7 @@ pub fn configure_panel(
 }
 
 pub fn set_material_hidden(window: &NativeMaterial, hidden: bool) {
+    apply_appearance(window.hwnd);
     // Windows 11 transient backdrop follows the same role as the macOS popover material.
     // The renderer supplies an opaque fallback on systems where DWM rejects it.
     let backdrop = if hidden { 1u32 } else { 3u32 };

@@ -6330,6 +6330,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "ureq",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
  "winresource",
 ]

@@ -13,12 +13,16 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class SidedoorSmoke {
+    [StructLayout(LayoutKind.Sequential)] public struct Bounds { public int Left, Top, Right, Bottom; }
     public delegate bool Callback(IntPtr window, IntPtr data);
     [DllImport("user32.dll")] static extern bool EnumWindows(Callback callback, IntPtr data);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int count);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Bounds bounds);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     public static IntPtr[] Windows(uint pid, string title, string className) {
         var matches = new List<IntPtr>();
         EnumWindows((window, _) => {
@@ -38,6 +42,15 @@ public static class SidedoorSmoke {
     }
 }
 '@
+Add-Type -AssemblyName System.Drawing, System.Windows.Forms
+function Save-Screen([string]$Name, [System.Drawing.Rectangle]$Bounds) {
+    $Bitmap = New-Object System.Drawing.Bitmap($Bounds.Width, $Bounds.Height)
+    $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
+    try {
+        $Graphics.CopyFromScreen($Bounds.Location, [System.Drawing.Point]::Empty, $Bounds.Size)
+        $Bitmap.Save((Join-Path $Log "$Name.png"))
+    } finally { $Graphics.Dispose(); $Bitmap.Dispose() }
+}
 $Process = Start-Process "$App/Sidedoor.exe" -PassThru -RedirectStandardOutput "$Log/stdout.log" -RedirectStandardError "$Log/stderr.log"
 try {
     $Deadline = (Get-Date).AddSeconds(30)
@@ -49,6 +62,11 @@ try {
     } while ($MessageWindows.Count -lt 2 -and (Get-Date) -lt $Deadline)
     if ($MessageWindows.Count -lt 2) { throw "Tray and shortcut message windows were not created" }
 
+    foreach ($Text in @("First clipboard entry", "https://example.com", "Windows clipboard — æøå 日本語", "A longer clipboard entry to check truncation and spacing", "Fifth clipboard entry")) {
+        Set-Clipboard -Value $Text
+        Start-Sleep -Milliseconds 650
+    }
+
     # Exercise the same callback used by RegisterHotKey, without sending keys to other apps.
     foreach ($Window in $MessageWindows) {
         [SidedoorSmoke]::PostMessage($Window, 0x0312, [UIntPtr]::new(1), [IntPtr]::Zero) | Out-Null
@@ -59,6 +77,10 @@ try {
         $History = [SidedoorSmoke]::Windows($Process.Id, "Clipboard History", $null)
     } while ($History.Count -eq 0 -and (Get-Date) -lt $Deadline)
     if ($History.Count -eq 0) { throw "Clipboard History did not open from its shortcut" }
+    Start-Sleep -Seconds 1
+    $Bounds = New-Object SidedoorSmoke+Bounds
+    [SidedoorSmoke]::GetWindowRect($History[0], [ref]$Bounds) | Out-Null
+    Save-Screen "history" ([System.Drawing.Rectangle]::FromLTRB($Bounds.Left, $Bounds.Top, $Bounds.Right, $Bounds.Bottom))
     $Bun = Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" | Where-Object { $_.ParentProcessId -eq $Process.Id }
     if (-not $Bun) { throw "The bundled plugin supervisor did not start" }
     foreach ($Window in $History) {
@@ -67,6 +89,27 @@ try {
     Start-Sleep -Seconds 1
     $Process.Refresh()
     if ($Process.HasExited) { throw "Closing History terminated Sidedoor" }
+    $Screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    [SidedoorSmoke]::SetCursorPos($Screen.Right - 1, $Screen.Height / 2) | Out-Null
+    Start-Sleep -Seconds 1
+    $Dock = $null
+    foreach ($Window in [SidedoorSmoke]::Windows($Process.Id, "", $null)) {
+        if (-not [SidedoorSmoke]::IsWindowVisible($Window)) { continue }
+        [SidedoorSmoke]::GetWindowRect($Window, [ref]$Bounds) | Out-Null
+        $Width = $Bounds.Right - $Bounds.Left
+        if ($Width -ge 50 -and $Width -le 150 -and $Bounds.Bottom - $Bounds.Top -gt $Width) {
+            $Dock = $Bounds
+            break
+        }
+    }
+    if (-not $Dock) { throw "Dock did not reveal at the screen edge" }
+    # Stats is the final default slot; Clipboard is immediately above it.
+    $Scale = ($Dock.Right - $Dock.Left) / 60
+    foreach ($Widget in @(@("stats", 34), @("clipboard", 86))) {
+        [SidedoorSmoke]::SetCursorPos(($Dock.Left + $Dock.Right) / 2, $Dock.Bottom - $Widget[1] * $Scale) | Out-Null
+        Start-Sleep -Seconds 2
+        Save-Screen $Widget[0] $Screen
+    }
     Write-Host "Packaged app started, bundled Bun started, and Clipboard History opened and closed."
 } finally {
     # Stop only this smoke test's process tree, including its bundled Bun child.

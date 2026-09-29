@@ -21,6 +21,8 @@ jobs:
           rustup default stable
           rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: SDK checks
         working-directory: sdk
         run: |
@@ -34,9 +36,12 @@ jobs:
         run: cargo fmt --check
       - name: Rust tests
         run: cargo test --locked
+      - name: Native Windows clipboard test
+        run: cargo test --locked native_clipboard_roundtrips -- --ignored --test-threads=1
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Package
+        id: package
         run: ./scripts/bundle-windows.ps1
       - name: Packaged application smoke test
         run: ./scripts/smoke-windows.ps1
@@ -44,9 +49,12 @@ jobs:
         if: always()
         with:
           name: Windows-smoke-logs
-          path: target/windows-bundle/smoke/*.log
+          path: |
+            target/windows-bundle/smoke/*.log
+            target/windows-bundle/smoke/*.png
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
+        if: always() && steps.package.outcome == 'success'
         with:
           name: Sidedoor-windows-x64
           path: |

@@ -8,7 +8,8 @@ use crate::{
     platform::{Accessibility, AppInfo, Copied, LoginItem, Platform},
 };
 use std::{
-    collections::HashSet,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     ptr::{null, null_mut},
@@ -41,6 +42,18 @@ use windows_sys::Win32::{
 #[derive(Default)]
 pub struct WindowsPlatform {
     plugins: crate::plugin::Runner,
+    app_targets: RefCell<HashMap<String, String>>,
+}
+
+impl WindowsPlatform {
+    fn app_info(&self, path: PathBuf, id: String) -> AppInfo {
+        if let Some(target) = super::shortcuts::target(&path) {
+            self.app_targets
+                .borrow_mut()
+                .insert(id.clone(), target.to_string_lossy().to_ascii_lowercase());
+        }
+        app_info(path, id)
+    }
 }
 
 /// Shared geometry remains in logical, bottom-left coordinates. Only this
@@ -67,6 +80,12 @@ pub fn process_path(hwnd: HWND) -> Option<PathBuf> {
     unsafe {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
+        process_path_by_id(pid)
+    }
+}
+
+fn process_path_by_id(pid: u32) -> Option<PathBuf> {
+    unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if process.is_null() {
             return None;
@@ -195,10 +214,21 @@ impl Platform for WindowsPlatform {
                 ids.insert(
                     String::from_utf16_lossy(&entry.szExeFile[..length]).to_ascii_lowercase(),
                 );
+                if let Some(path) = process_path_by_id(entry.th32ProcessID) {
+                    ids.insert(path.to_string_lossy().to_ascii_lowercase());
+                }
                 available = Process32NextW(snapshot, &mut entry);
             }
             CloseHandle(snapshot);
         }
+        let matching: Vec<_> = self
+            .app_targets
+            .borrow()
+            .iter()
+            .filter(|(_, target)| ids.contains(*target))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.extend(matching);
         ids
     }
 
@@ -260,7 +290,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn app_by_bundle_id(&self, id: &str) -> Option<AppInfo> {
-        Some(app_info(find_app(id)?, id.into()))
+        Some(self.app_info(find_app(id)?, id.into()))
     }
 
     fn app_at(&self, path: &Path) -> Option<AppInfo> {
@@ -272,10 +302,7 @@ impl Platform for WindowsPlatform {
         {
             return None;
         }
-        Some(app_info(
-            path.to_path_buf(),
-            path.to_string_lossy().into_owned(),
-        ))
+        Some(self.app_info(path.to_path_buf(), path.to_string_lossy().into_owned()))
     }
 
     fn open(&self, path: &Path) -> io::Result<()> {
@@ -362,6 +389,7 @@ impl Platform for WindowsPlatform {
             if let ClipKind::File { path } = kind {
                 let _clipboard =
                     clipboard_win::Clipboard::new_attempts(3).map_err(|e| e.to_string())?;
+                clipboard_win::empty().map_err(|e| e.to_string())?;
                 return clipboard_win::raw::set_file_list(&[path.to_string_lossy()])
                     .map_err(|e| e.to_string());
             }

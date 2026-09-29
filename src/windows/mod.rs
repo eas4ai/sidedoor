@@ -3,7 +3,11 @@
 mod icons;
 pub mod message_window;
 pub mod services;
+mod shortcuts;
 pub mod system;
+
+#[cfg(test)]
+mod tests;
 
 /// Shared application icon embedded in the executable (resource 1).
 /// LoadIcon returns a shared handle whose lifetime is the loaded module.
