@@ -3,7 +3,7 @@
 
 use crate::{
     clipboard::{ClipKind, History},
-    config::Config,
+    config::{Appearance, Config},
     geometry::{Point, Screen},
 };
 use std::{
@@ -38,6 +38,18 @@ pub struct Accessibility {
     pub reduce_motion: bool,
 }
 
+/// Whether the app starts when the user logs in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoginItem {
+    On,
+    #[default]
+    Off,
+    /// Registered, but the user must allow it in System Settings.
+    NeedsApproval,
+    /// Only an app bundle can be a login item.
+    Unavailable,
+}
+
 pub trait Platform {
     /// The display with the menu bar.
     fn main_screen(&self) -> Option<Screen>;
@@ -62,6 +74,11 @@ pub trait Platform {
 
     fn save_config(&self, config: &Config) -> io::Result<()>;
     fn save_history(&self, history: &History) -> io::Result<()>;
+
+    /// Forces light or dark for every window, or follows the system.
+    fn set_appearance(&self, appearance: Appearance);
+    fn login_item(&self) -> LoginItem;
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), String>;
 }
 
 /// Where the clone keeps its files.
@@ -94,6 +111,8 @@ pub mod fake {
         pub pasteboard: RefCell<(isize, Option<Copied>)>,
         pub written: RefCell<Vec<ClipKind>>,
         pub saved_configs: RefCell<Vec<Config>>,
+        pub appearance: RefCell<Option<Appearance>>,
+        pub login: RefCell<LoginItem>,
     }
 
     impl FakePlatform {
@@ -171,6 +190,20 @@ pub mod fake {
             Ok(())
         }
         fn save_history(&self, _: &History) -> io::Result<()> {
+            Ok(())
+        }
+        fn set_appearance(&self, appearance: Appearance) {
+            *self.appearance.borrow_mut() = Some(appearance);
+        }
+        fn login_item(&self) -> LoginItem {
+            *self.login.borrow()
+        }
+        fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+            *self.login.borrow_mut() = if enabled {
+                LoginItem::On
+            } else {
+                LoginItem::Off
+            };
             Ok(())
         }
     }

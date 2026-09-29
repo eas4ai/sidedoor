@@ -202,14 +202,14 @@ pub struct CardShape {
 /// Cards with content: generous corners, a clear arrow.
 pub const CARD_SHAPE: CardShape = CardShape {
     radius: CARD_RADIUS,
-    arrow_half_width: 9.0,
+    arrow_half_width: 13.0,
     arrow_depth: 8.0,
 };
 
 /// One-line tooltips: tighter corners leave a straight edge for the arrow.
 pub const TOOLTIP_SHAPE: CardShape = CardShape {
-    radius: 8.0,
-    arrow_half_width: 6.0,
+    radius: 7.0,
+    arrow_half_width: 7.0,
     arrow_depth: 6.0,
 };
 
@@ -258,10 +258,6 @@ fn at(x: f64, y: f64) -> Point {
     Point { x, y }
 }
 
-fn lerp(a: Point, b: Point, t: f64) -> Point {
-    at(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
-}
-
 impl CardPlacement {
     /// The card body inside the window, in window points from the top-left.
     pub fn body(&self) -> Rect {
@@ -271,6 +267,17 @@ impl CardPlacement {
             ArrowSide::Right => Rect::new(0.0, 0.0, width - depth, height),
             ArrowSide::Left => Rect::new(depth, 0.0, width - depth, height),
             ArrowSide::Bottom => Rect::new(0.0, 0.0, width, height - depth),
+        }
+    }
+
+    /// Where the arrow points, in window points from the top-left: the spot
+    /// a popover grows out of.
+    pub fn arrow_tip(&self) -> Point {
+        let (width, height) = (self.frame.width, self.frame.height);
+        match self.side {
+            ArrowSide::Right => at(width, self.arrow_offset),
+            ArrowSide::Left => at(0.0, self.arrow_offset),
+            ArrowSide::Bottom => at(self.arrow_offset, height),
         }
     }
 
@@ -372,41 +379,25 @@ impl CardPlacement {
                 start.y + direction.1 * t + outward.1 * out,
             )
         };
-        // Soft joins where the arrow leaves and rejoins the edge, and a
-        // rounded tip, like a macOS popover.
-        let fillet = half * 0.35;
-        let base_a = point(along - half, 0.0);
-        let base_b = point(along + half, 0.0);
-        let tip = point(along, depth);
-        steps.push(PathStep::Line(point(along - half - fillet, 0.0)));
+        // One smooth flare, like a macOS popover's: each side leaves the edge
+        // tangentially, sweeps out, and meets the other in a rounded tip.
+        let flank = |sign: f64, t: f64, out: f64| point(along + sign * half * t, depth * out);
+        steps.push(PathStep::Line(flank(-1.0, 1.0, 0.0)));
         steps.push(PathStep::Cubic {
-            control_a: base_a,
-            control_b: base_a,
-            to: lerp(base_a, tip, 0.25),
+            control_a: flank(-1.0, 0.55, 0.0),
+            control_b: flank(-1.0, 0.38, 0.5),
+            to: flank(-1.0, 0.2, 0.86),
         });
-        steps.push(PathStep::Line(lerp(base_a, tip, 0.78)));
         steps.push(PathStep::Cubic {
-            control_a: tip,
-            control_b: tip,
-            to: lerp(base_b, tip, 0.78),
+            control_a: flank(-1.0, 0.08, 1.0),
+            control_b: flank(1.0, 0.08, 1.0),
+            to: flank(1.0, 0.2, 0.86),
         });
-        steps.push(PathStep::Line(lerp(base_b, tip, 0.25)));
         steps.push(PathStep::Cubic {
-            control_a: base_b,
-            control_b: base_b,
-            to: point(along + half + fillet, 0.0),
+            control_a: flank(1.0, 0.38, 0.5),
+            control_b: flank(1.0, 0.55, 0.0),
+            to: flank(1.0, 1.0, 0.0),
         });
-    }
-}
-
-impl ArrowSide {
-    /// A `distance`-point step toward the dock, in screen coordinates.
-    pub fn toward_dock(self, distance: f64) -> (f64, f64) {
-        match self {
-            Self::Right => (distance, 0.0),
-            Self::Left => (-distance, 0.0),
-            Self::Bottom => (0.0, -distance),
-        }
     }
 }
 
@@ -444,7 +435,7 @@ pub fn card_placement(
     // that gets its arrow centered.
     let arrow_on = |along: f64, length: f64| {
         let radius = shape.radius.min(width / 2.0).min(height / 2.0);
-        let margin = radius + shape.arrow_half_width * 1.35;
+        let margin = radius + shape.arrow_half_width;
         if length < margin * 2.0 {
             length / 2.0
         } else {

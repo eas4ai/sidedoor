@@ -139,6 +139,76 @@ pub fn fetch(location: &WeatherLocation) -> Result<Weather, String> {
     parse(&body)
 }
 
+/// A place the weather can be shown for, from Open-Meteo's geocoder.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Place {
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    /// State or region, when the geocoder knows it.
+    #[serde(default, rename = "admin1")]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub country: Option<String>,
+}
+
+impl Place {
+    /// "North Denmark, Denmark": what tells same-named places apart.
+    pub fn detail(&self) -> String {
+        [&self.region, &self.country]
+            .into_iter()
+            .flatten()
+            .filter(|part| **part != self.name)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn location(&self) -> WeatherLocation {
+        WeatherLocation {
+            name: self.name.clone(),
+            latitude: self.latitude,
+            longitude: self.longitude,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct Places {
+    #[serde(default)]
+    results: Vec<Place>,
+}
+
+pub fn search_url(query: &str) -> String {
+    let encoded: String = query
+        .trim()
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect();
+    format!("https://geocoding-api.open-meteo.com/v1/search?name={encoded}&count=6&format=json")
+}
+
+pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
+    let places: Places = serde_json::from_str(json).map_err(|err| err.to_string())?;
+    Ok(places.results)
+}
+
+/// Blocking place search; call it from a background task.
+pub fn search(query: &str) -> Result<Vec<Place>, String> {
+    let body = ureq::get(&search_url(query))
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+        .map_err(|err| format!("Couldn't reach Open-Meteo ({err})"))?
+        .into_string()
+        .map_err(|err| err.to_string())?;
+    parse_places(&body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +236,28 @@ mod tests {
     #[test]
     fn rejects_malformed_payloads() {
         assert!(parse("{}").is_err());
+    }
+
+    #[test]
+    fn parses_places_and_describes_them() {
+        let json = r#"{"results":[
+            {"id":1,"name":"Aalborg","latitude":57.048,"longitude":9.9187,"country":"Denmark","admin1":"North Denmark"},
+            {"id":2,"name":"Singapore","latitude":1.29,"longitude":103.85,"country":"Singapore","admin1":"Singapore"}
+        ],"generationtime_ms":0.5}"#;
+        let places = parse_places(json).unwrap();
+        assert_eq!(places.len(), 2);
+        assert_eq!(places[0].detail(), "North Denmark, Denmark");
+        assert_eq!(places[1].detail(), "");
+        assert_eq!(places[0].location().name, "Aalborg");
+        assert!(
+            parse_places(r#"{"generationtime_ms":0.1}"#)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_urls_escape_the_query() {
+        assert!(search_url(" São Paulo ").contains("name=S%C3%A3o%20Paulo&"));
     }
 }

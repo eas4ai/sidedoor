@@ -5,7 +5,7 @@ use crate::{
     clipboard::{self, ClipKind, History},
     config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation},
     geometry::{self, Edge, Rect, Reveal, Screen},
-    platform::{Accessibility, AppInfo, Platform},
+    platform::{Accessibility, AppInfo, LoginItem, Platform},
     shortcut::Shortcut,
     stats::{Sampler, Snapshot},
     weather::{self, Weather},
@@ -77,6 +77,34 @@ impl DockItem {
     }
 }
 
+/// A widget the dock can hold, at most once each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Widget {
+    Weather,
+    Clipboard,
+    Stats,
+}
+
+impl Widget {
+    pub const ALL: [Self; 3] = [Self::Weather, Self::Clipboard, Self::Stats];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Weather => "Weather",
+            Self::Clipboard => "Clipboard",
+            Self::Stats => "Stats",
+        }
+    }
+
+    fn item(self) -> DockItem {
+        DockItem::widget(match self {
+            Self::Weather => ItemKind::Weather,
+            Self::Clipboard => ItemKind::Clipboard,
+            Self::Stats => ItemKind::Stats,
+        })
+    }
+}
+
 /// Requests the dock makes of the app around it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockEvent {
@@ -127,6 +155,8 @@ pub struct Dock {
     /// Whether this dock follows the real pointer (off in tests, which drive
     /// the views directly).
     live: bool,
+    /// Refreshes the forecast for `location`; replaced when it changes.
+    weather_task: Option<Task<()>>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -157,8 +187,10 @@ impl Dock {
             tasks.push(every(SYSTEM_INTERVAL, cx, Self::poll_system));
             tasks.push(every(STATS_INTERVAL, cx, Self::poll_stats));
             tasks.push(every(PASTEBOARD_INTERVAL, cx, Self::poll_pasteboard));
-            tasks.push(Self::weather_task(config.weather.clone(), cx));
         }
+        let weather_task = services
+            .live
+            .then(|| Self::weather_task(config.weather.clone(), cx));
         Self {
             running: platform.running_bundle_ids(),
             accessibility: platform.accessibility(),
@@ -182,6 +214,7 @@ impl Dock {
             screen,
             reveal: Reveal::default(),
             live: services.live,
+            weather_task,
             _tasks: tasks,
         }
     }
@@ -348,6 +381,76 @@ impl Dock {
             }
             self.items_changed(cx);
         }
+    }
+
+    /// Adds a widget the dock doesn't have yet, at the end.
+    pub fn add_widget(&mut self, widget: Widget, cx: &mut Context<Self>) -> bool {
+        let item = widget.item();
+        if self.items.len() >= MAX_ITEMS || self.index_of(&item.id).is_some() {
+            return false;
+        }
+        self.items.push(item);
+        self.items_changed(cx);
+        true
+    }
+
+    /// Widgets that could still be added.
+    pub fn missing_widgets(&self) -> Vec<Widget> {
+        Widget::ALL
+            .into_iter()
+            .filter(|widget| self.index_of(&widget.item().id).is_none())
+            .collect()
+    }
+
+    // MARK: Settings
+
+    pub fn appearance(&self) -> Appearance {
+        self.appearance
+    }
+
+    /// Moves the dock to another edge and shows it there for a moment.
+    pub fn set_edge(&mut self, edge: Edge, cx: &mut Context<Self>) {
+        if edge == self.edge {
+            return;
+        }
+        self.edge = edge;
+        self.reveal.show_for(Instant::now(), PEEK);
+        self.items_changed(cx);
+    }
+
+    pub fn set_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        if appearance == self.appearance {
+            return;
+        }
+        self.appearance = appearance;
+        self.platform.set_appearance(appearance);
+        self.save_config();
+        cx.notify();
+    }
+
+    /// Shows the weather for another place, fetching it right away.
+    pub fn set_location(&mut self, location: WeatherLocation, cx: &mut Context<Self>) {
+        if location == self.location {
+            return;
+        }
+        self.location = location.clone();
+        self.weather = WeatherState::Loading;
+        if self.live {
+            self.weather_task = Some(Self::weather_task(location, cx));
+        }
+        self.save_config();
+        cx.notify();
+    }
+
+    pub fn login_item(&self) -> LoginItem {
+        self.platform.login_item()
+    }
+
+    pub fn set_launch_at_login(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if let Err(err) = self.platform.set_launch_at_login(enabled) {
+            eprintln!("sidekick: couldn't change launch at login: {err}");
+        }
+        cx.notify();
     }
 
     // MARK: Shortcuts

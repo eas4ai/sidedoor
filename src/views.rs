@@ -72,6 +72,15 @@ pub struct RemoveShortcut {
     pub id: SharedString,
 }
 
+#[derive(Clone, Default, PartialEq, Action)]
+#[action(namespace = sidekick, no_json)]
+pub struct OpenSettings;
+
+/// Opens the settings file in the user's text editor.
+#[derive(Clone, Default, PartialEq, Action)]
+#[action(namespace = sidekick, no_json)]
+pub struct OpenConfigFile;
+
 /// Size of the card or tooltip for `item`, arrow excluded. `text_width`
 /// measures a tooltip label in points.
 pub fn card_size(item: &DockItem, dock: &Dock, text_width: impl Fn(&str) -> f64) -> (f64, f64) {
@@ -235,7 +244,7 @@ impl DockView {
                 let scale = spring(
                     SharedString::from(format!("scale:{id}")),
                     target,
-                    Spring::new(Duration::from_millis(280)).with_damping(0.62),
+                    Spring::new(Duration::from_millis(240)).with_damping(0.82),
                     window,
                     cx,
                 );
@@ -466,6 +475,8 @@ fn slot(
                 };
                 menu.separator()
                     .menu("Remove from Dock", Box::new(RemoveItem { id: id.clone() }))
+                    .separator()
+                    .menu("Dock Settings…", Box::new(OpenSettings))
                     .show(event.position, window, cx);
                 cx.stop_propagation();
             },
@@ -750,9 +761,10 @@ impl Render for CardView {
             }
             // Each item's content fades up as the card arrives or glides over.
             // A tooltip is a single word: it only needs a quick cross-fade.
-            let (duration, rise_by) = match item.kind {
-                ItemKind::App(_) => (Duration::from_millis(110), 0.0),
-                _ => (Duration::from_millis(260), 6.0),
+            // Tooltip text starts part-way in, so the pill never shows empty.
+            let (duration, rise_by, floor) = match item.kind {
+                ItemKind::App(_) => (Duration::from_millis(90), 0.0, 0.4),
+                _ => (Duration::from_millis(200), 3.0, 0.0),
             };
             content
                 .with_animation(
@@ -760,7 +772,9 @@ impl Render for CardView {
                     Animation::new(duration),
                     move |content, t| {
                         let rise = motion::sample(motion::CARD_IN.curve, t);
-                        content.opacity(ease_out(t)).top(px((1.0 - rise) * rise_by))
+                        content
+                            .opacity(floor + (1.0 - floor) * ease_out(t))
+                            .top(px((1.0 - rise) * rise_by))
                     },
                 )
                 .into_any_element()
@@ -1163,7 +1177,7 @@ fn clipboard_card(
             }
             // Rows cascade in as the card opens, and a new copy slides in on top.
             let delay = motion::ROW_STAGGER.as_secs_f32() * index as f32;
-            let duration = 0.32 + delay;
+            let duration = 0.24 + delay;
             div()
                 .relative()
                 .child(row)
@@ -1173,7 +1187,7 @@ fn clipboard_card(
                     move |row, t| {
                         let local = ((t * duration - delay) / (duration - delay)).clamp(0.0, 1.0);
                         let rise = motion::sample(motion::ICON_IN.curve, local);
-                        row.opacity(ease_out(local)).top(px((1.0 - rise) * 8.0))
+                        row.opacity(ease_out(local)).top(px((1.0 - rise) * 4.0))
                     },
                 )
                 .into_any_element()

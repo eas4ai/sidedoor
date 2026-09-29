@@ -12,10 +12,7 @@ use gpui_kit::{
     ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
     Subscription, TestSupportExt as _, Window, WindowControlArea,
     assets::IconName,
-    component::{
-        input::{Input, InputEvent, InputState},
-        kbd::Kbd,
-    },
+    component::input::{Input, InputEvent, InputState},
     div, img,
     prelude::FluentBuilder as _,
     px, relative, svg,
@@ -64,6 +61,7 @@ impl ClipboardWindow {
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type to filter entries…"));
         let view = cx.entity().downgrade();
+        crate::style::sync_kit_theme(window, cx);
         let subscriptions = vec![
             cx.subscribe_in(&search, window, |this, state, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -76,7 +74,10 @@ impl ClipboardWindow {
                 this.keep_selection_valid(cx);
                 cx.notify();
             }),
-            cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
+            cx.observe_window_appearance(window, |_, window, cx| {
+                crate::style::sync_kit_theme(window, cx);
+                cx.notify();
+            }),
             // The search field binds the arrows, Return and Escape itself;
             // intercept them first while this window has focus.
             cx.intercept_keystrokes(move |event, window, cx| {
@@ -742,7 +743,8 @@ fn footer(
                 |button| button.opacity(0.4),
             )
             .child(label)
-            .children(Keystroke::parse(keys).ok().map(Kbd::new))
+            // Key equivalents read like a menu's: plain symbols, dimmed.
+            .child(div().text_color(palette.tertiary).child(keys))
     };
 
     div()
@@ -789,14 +791,14 @@ fn footer(
                 .child(action(
                     "copy-entry",
                     "Copy to Clipboard",
-                    "enter",
+                    "↩",
                     ClipboardWindow::copy_selected,
                 ))
                 .child(div().w(px(1.0)).h(px(16.0)).bg(palette.separator))
                 .child(action(
                     "delete-entry",
                     "Delete",
-                    "cmd-backspace",
+                    "⌘⌫",
                     ClipboardWindow::delete_selected,
                 )),
         )

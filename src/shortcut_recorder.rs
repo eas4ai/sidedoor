@@ -67,8 +67,12 @@ impl ShortcutRecorder {
                 .ok();
             true
         });
+        crate::style::sync_kit_theme(window, cx);
         let subscriptions = vec![
-            cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
+            cx.observe_window_appearance(window, |_, window, cx| {
+                crate::style::sync_kit_theme(window, cx);
+                cx.notify();
+            }),
             // Every key belongs to the recording, even ones apps bind.
             cx.intercept_keystrokes(move |event, _, cx| {
                 if !event

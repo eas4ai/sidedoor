@@ -1,7 +1,7 @@
 //! AppKit semantic colors and text sizes, so the UI reads as native macOS.
 
 use crate::platform::Accessibility;
-use gpui_kit::{Hsla, Window, WindowAppearance, rgba};
+use gpui_kit::{App, Hsla, Window, WindowAppearance, component::Theme, rgba};
 
 /// macOS text styles (points).
 pub mod text {
@@ -12,6 +12,37 @@ pub mod text {
     pub const CAPTION: f32 = 10.0;
     pub const MICRO: f32 = 8.0;
     pub const DISPLAY: f32 = 28.0;
+}
+
+fn is_dark(window: &Window) -> bool {
+    matches!(
+        window.appearance(),
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    )
+}
+
+/// Points GPUI Kit's theme at the window's light or dark appearance, with
+/// the accent-colored caret and selection macOS text fields use. Call when a
+/// window opens and whenever its appearance changes.
+pub fn sync_kit_theme(window: &mut Window, cx: &mut App) {
+    let dark = is_dark(window);
+    if !cx.has_global::<Theme>() || Theme::global(cx).is_dark() != dark {
+        Theme::change(window.appearance(), Some(window), cx);
+    }
+    let caret = if dark {
+        Palette::dark()
+    } else {
+        Palette::light()
+    }
+    .blue;
+    if Theme::global(cx).caret == caret {
+        return;
+    }
+    Theme::update(cx, |theme| {
+        theme.colors.caret = caret;
+        // `selectedTextBackgroundColor`
+        theme.colors.selection = color(if dark { 0x3f638bff } else { 0xb3d7ffff });
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -39,8 +70,10 @@ pub struct Palette {
     pub segment: Hsla,
     /// Text and glyphs on an accent-colored background.
     pub on_accent: Hsla,
-    /// A key drawn as a keycap.
+    /// A key drawn as a keycap; also the face of push buttons.
     pub keycap: Hsla,
+    /// Background of a grouped form section.
+    pub group: Hsla,
     pub blue: Hsla,
     pub green: Hsla,
     pub orange: Hsla,
@@ -55,10 +88,7 @@ fn color(value: u32) -> Hsla {
 
 impl Palette {
     pub fn new(window: &Window, accessibility: Accessibility) -> Self {
-        let dark = matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        );
+        let dark = is_dark(window);
         let mut palette = if dark { Self::dark() } else { Self::light() };
         if accessibility.increase_contrast {
             palette.secondary = palette.label.opacity(0.8);
@@ -66,7 +96,13 @@ impl Palette {
             palette.stroke = palette.label.opacity(0.55);
             palette.separator = palette.label.opacity(0.35);
         }
-        if !accessibility.reduce_transparency {
+        if accessibility.reduce_transparency {
+            palette.group = if dark {
+                color(0x2a2a2aff)
+            } else {
+                color(0xffffffff)
+            };
+        } else {
             palette.surface = color(0x00000000);
         }
         palette
@@ -86,6 +122,7 @@ impl Palette {
             segment: color(0xffffffff),
             on_accent: color(0xffffffff),
             keycap: color(0xffffffff),
+            group: color(0xffffffb3),
             blue: color(0x007affff),
             green: color(0x28cd41ff),
             orange: color(0xff9500ff),
@@ -109,6 +146,7 @@ impl Palette {
             segment: color(0xffffff2e),
             on_accent: color(0xffffffff),
             keycap: color(0xffffff1f),
+            group: color(0xffffff0d),
             blue: color(0x0a84ffff),
             green: color(0x32d74bff),
             orange: color(0xff9f0aff),

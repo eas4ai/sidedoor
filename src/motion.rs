@@ -31,18 +31,21 @@ const fn motion(millis: u64, x1: f32, y1: f32, x2: f32, y2: f32) -> Motion {
 pub const DOCK_IN: Motion = motion(420, 0.2, 1.22, 0.32, 1.0);
 /// The dock tucking away: accelerates out, no bounce.
 pub const DOCK_OUT: Motion = motion(220, 0.4, 0.0, 0.85, 0.45);
-/// A card appearing beside its item.
-pub const CARD_IN: Motion = motion(280, 0.2, 1.15, 0.3, 1.0);
-/// A card gliding from one item to the next.
-pub const CARD_MOVE: Motion = motion(220, 0.25, 1.05, 0.3, 1.0);
+/// A card appearing beside its item, settling with a hint of overshoot.
+pub const CARD_IN: Motion = motion(220, 0.25, 1.04, 0.3, 1.0);
+/// A card gliding from one item to the next: a plain ease-out, so quick
+/// sweeps along the dock don't wobble.
+pub const CARD_MOVE: Motion = motion(170, 0.25, 0.8, 0.25, 1.0);
+/// The scale a card grows from as it appears, like an `NSPopover`.
+pub const POPOVER_SCALE: f64 = 0.86;
+/// The scale a card shrinks to as it leaves.
+pub const POPOVER_EXIT_SCALE: f64 = 0.95;
 /// A card leaving.
 pub const CARD_OUT: Motion = motion(140, 0.4, 0.0, 1.0, 1.0);
 
 /// A window fading in.
 pub const WINDOW_IN: Motion = motion(180, 0.25, 0.1, 0.25, 1.0);
 
-/// How far a card travels toward its final spot as it appears.
-pub const CARD_TRAVEL: f64 = 10.0;
 /// How far a dock icon travels in from the edge as the dock appears.
 pub const ICON_TRAVEL: f32 = 16.0;
 /// Delay between neighboring icons as they arrive.
@@ -50,12 +53,12 @@ pub const ICON_STAGGER: Duration = Duration::from_millis(24);
 /// Each icon's own arrival.
 pub const ICON_IN: Motion = motion(460, 0.2, 1.3, 0.3, 1.0);
 /// Delay between clipboard rows as a card opens.
-pub const ROW_STAGGER: Duration = Duration::from_millis(30);
+pub const ROW_STAGGER: Duration = Duration::from_millis(15);
 
-/// Largest extra scale under the pointer, as a fraction (0.26 → 126%).
-pub const MAGNIFY: f32 = 0.26;
+/// Largest extra scale under the pointer, as a fraction (0.14 → 114%).
+pub const MAGNIFY: f32 = 0.14;
 /// How far magnification reaches, in slots.
-const MAGNIFY_REACH: f32 = 1.35;
+const MAGNIFY_REACH: f32 = 1.1;
 /// Scale of an item while it is pressed.
 pub const PRESSED: f32 = 0.86;
 

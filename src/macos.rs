@@ -7,9 +7,11 @@ use crate::{
     clipboard::{ClipKind, History},
     config::{Appearance, Config},
     geometry::{CardPlacement, PathStep, Point, Rect, Screen},
-    motion::{CARD_IN, CARD_MOVE, CARD_OUT, Curve, DOCK_IN, DOCK_OUT, Motion, WINDOW_IN},
-    platform::{Accessibility, AppInfo, Copied, Platform, cache_dir},
-    status_menu::LoginItem,
+    motion::{
+        CARD_IN, CARD_MOVE, CARD_OUT, Curve, DOCK_IN, DOCK_OUT, Motion, POPOVER_EXIT_SCALE,
+        POPOVER_SCALE, WINDOW_IN,
+    },
+    platform::{Accessibility, AppInfo, Copied, LoginItem, Platform, cache_dir},
 };
 use objc2::{
     AnyThread, MainThreadMarker, MainThreadOnly, msg_send,
@@ -28,8 +30,12 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSArray, NSBundle, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSTimeZone, NSURL,
+    NSValue,
 };
-use objc2_quartz_core::{CAMediaTimingFunction, CAShapeLayer, CATransaction};
+use objc2_quartz_core::{
+    CABasicAnimation, CAMediaTiming as _, CAMediaTimingFunction, CAShapeLayer, CATransaction,
+    CATransform3D, NSValueCATransform3DAdditions as _,
+};
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
@@ -329,6 +335,18 @@ impl Platform for MacPlatform {
         std::fs::write(&temp, json)?;
         std::fs::rename(temp, path)
     }
+
+    fn set_appearance(&self, appearance: Appearance) {
+        set_appearance(appearance);
+    }
+
+    fn login_item(&self) -> LoginItem {
+        login_item()
+    }
+
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+        set_launch_at_login(enabled)
+    }
 }
 
 fn app_info(bundle_id: String, path: PathBuf) -> AppInfo {
@@ -497,9 +515,15 @@ pub fn shape_card(material: &NSView, placement: &CardPlacement) {
     let Some(layer) = material.layer() else {
         return;
     };
-    let height = placement.frame.height;
-    // Window points from the top-left → view points from the bottom-left.
-    let flip = |point: Point| NSPoint::new(point.x, height - point.y);
+    // Liquid Glass draws its own rounded rim along its bounds, which would
+    // show inside the outline as a second border. Let the material overhang
+    // the window so its rim is masked away and the drawn hairline is the
+    // only edge.
+    const OVERHANG: f64 = 32.0;
+    let (width, height) = (placement.frame.width, placement.frame.height);
+    // Window points from the top-left → material points from its
+    // bottom-left, which sits `OVERHANG` outside the window.
+    let flip = |point: Point| NSPoint::new(point.x + OVERHANG, height - point.y + OVERHANG);
     let path = NSBezierPath::bezierPath();
     for step in placement.outline() {
         match step {
@@ -522,6 +546,10 @@ pub fn shape_card(material: &NSView, placement: &CardPlacement) {
     // old mask into the new one while the window glides.
     CATransaction::begin();
     CATransaction::setDisableActions(true);
+    material.setFrame(NSRect::new(
+        NSPoint::new(-OVERHANG, -OVERHANG),
+        NSSize::new(width + 2.0 * OVERHANG, height + 2.0 * OVERHANG),
+    ));
     let mask = CAShapeLayer::new();
     mask.setPath(Some(&path.CGPath()));
     // The corner radius from `configure_panel` would clip the arrow.
@@ -542,14 +570,6 @@ fn animate(motion: Motion, changes: impl FnOnce()) {
     )));
     changes();
     NSAnimationContext::endGrouping();
-}
-
-fn offset(frame: Rect, by: (f64, f64)) -> Rect {
-    Rect {
-        x: frame.x + by.0,
-        y: frame.y + by.1,
-        ..frame
-    }
 }
 
 /// Slides the dock to `frame`, springing in or tucking away.
@@ -580,8 +600,9 @@ pub fn set_top_left(window: &NSWindow, frame: Rect) {
 /// How a card reaches its frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CardEntry {
-    /// Appear, travelling in by the given offset (zero without motion).
-    Appear { from: (f64, f64) },
+    /// Grow out of `anchor` (window points from the top-left, the arrow
+    /// tip) while fading in, like an `NSPopover`.
+    Pop { anchor: Point },
     /// Glide from `from`, a frame of the new size where the previous card was.
     Glide { from: Rect },
     /// Jump straight there.
@@ -593,14 +614,11 @@ pub fn show_card(window: &NSWindow, frame: Rect, entry: CardEntry) {
     window.setIgnoresMouseEvents(false);
     window.orderFrontRegardless();
     match entry {
-        CardEntry::Appear { from } => {
-            set_top_left(window, offset(frame, from));
+        CardEntry::Pop { anchor } => {
+            set_top_left(window, frame);
             window.setAlphaValue(0.0);
-            animate(CARD_IN, || {
-                let animator = window.animator();
-                animator.setFrame_display(ns_rect(frame), true);
-                animator.setAlphaValue(1.0);
-            });
+            scale_content(window, anchor, POPOVER_SCALE, 1.0, CARD_IN);
+            animate(CARD_IN, || window.animator().setAlphaValue(1.0));
         }
         CardEntry::Glide { from } => {
             set_top_left(window, from);
@@ -617,13 +635,51 @@ pub fn show_card(window: &NSWindow, frame: Rect, entry: CardEntry) {
     window.invalidateShadow();
 }
 
-/// Fades a card out, drifting `toward` the dock unless motion is reduced.
-pub fn hide_card(window: &NSWindow, toward: (f64, f64)) {
+/// Fades a card out, shrinking back into `anchor` (its arrow tip) unless
+/// motion is reduced.
+pub fn hide_card(window: &NSWindow, anchor: Option<Point>) {
     window.setIgnoresMouseEvents(true);
-    let frame = rect(window.frame());
-    animate(CARD_OUT, || {
-        let animator = window.animator();
-        animator.setFrame_display(ns_rect(offset(frame, toward)), true);
-        animator.setAlphaValue(0.0);
-    });
+    if let Some(anchor) = anchor {
+        scale_content(window, anchor, 1.0, POPOVER_EXIT_SCALE, CARD_OUT);
+    }
+    animate(CARD_OUT, || window.animator().setAlphaValue(0.0));
+}
+
+/// Animates the window's whole content (GPUI drawing and material) from
+/// `from` to `to` scale about `anchor`, in window points from the top-left.
+/// Only the presentation animates; the content's own transform stays
+/// identity, so nothing lingers once the animation ends.
+fn scale_content(window: &NSWindow, anchor: Point, from: f64, to: f64, motion: Motion) {
+    let Some(layer) = window.contentView().and_then(|view| view.layer()) else {
+        return;
+    };
+    let bounds = layer.bounds();
+    let unit = layer.anchorPoint();
+    // Layer points run from the bottom-left unless the layer is flipped.
+    let pivot_y = if layer.isGeometryFlipped() {
+        anchor.y
+    } else {
+        bounds.size.height - anchor.y
+    };
+    let (dx, dy) = (
+        anchor.x - unit.x * bounds.size.width,
+        pivot_y - unit.y * bounds.size.height,
+    );
+    let about = |scale: f64| {
+        CATransform3D::new_translation(dx, dy, 0.0)
+            .scale(scale, scale, 1.0)
+            .translate(-dx, -dy, 0.0)
+    };
+    let Curve { x1, y1, x2, y2 } = motion.curve;
+    let animation = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("transform")));
+    // SAFETY: `transform` animates `CATransform3D` values boxed in NSValue.
+    unsafe {
+        animation.setFromValue(Some(&NSValue::valueWithCATransform3D(about(from))));
+        animation.setToValue(Some(&NSValue::valueWithCATransform3D(about(to))));
+    }
+    animation.setDuration(motion.duration.as_secs_f64());
+    animation.setTimingFunction(Some(&CAMediaTimingFunction::functionWithControlPoints(
+        x1, y1, x2, y2,
+    )));
+    layer.addAnimation_forKey(&animation, Some(&NSString::from_str("popover")));
 }

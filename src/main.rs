@@ -10,6 +10,7 @@ mod hotkeys;
 mod macos;
 mod motion;
 mod platform;
+mod settings_window;
 mod shortcut;
 mod shortcut_recorder;
 mod stats;
@@ -36,11 +37,12 @@ use hotkeys::{HotKeys, RegisterError};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow};
 use platform::Platform;
+use settings_window::{SettingsEvent, SettingsWindow};
 use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
 use std::{cell::RefCell, rc::Rc};
 use views::{
-    AssignShortcut, CardChrome, CardView, DockView, OpenItem, RemoveItem, RemoveShortcut,
-    RevealItem,
+    AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem, OpenSettings,
+    RemoveItem, RemoveShortcut, RevealItem,
 };
 
 icon_assets!(
@@ -69,6 +71,13 @@ icon_assets!(
         Search,
         CircleX,
         Keyboard,
+        Settings,
+        PanelRight,
+        LayoutGrid,
+        GripVertical,
+        CircleMinus,
+        MapPin,
+        Check,
     ]
 );
 
@@ -122,6 +131,7 @@ struct Panels {
     chrome: Entity<CardChrome>,
     shown: bool,
     dock_frame: Option<Rect>,
+    edge: Option<geometry::Edge>,
     card_placement: Option<CardPlacement>,
     reduce_transparency: bool,
     _status: status_menu::StatusMenu,
@@ -157,7 +167,7 @@ impl Panels {
                 .find(|(label, _)| label == text)
                 .map_or(0.0, |(_, width)| *width)
         };
-        let (shown, frame, hidden_frame, accessibility, placement) = {
+        let (shown, frame, hidden_frame, edge, accessibility, placement) = {
             let model = dock.read(cx);
             let frame = model.frame();
             let hidden = geometry::hidden_dock_frame(model.screen(), model.edge, model.items.len());
@@ -169,6 +179,7 @@ impl Panels {
                 model.is_shown(),
                 frame,
                 hidden,
+                model.edge,
                 model.accessibility,
                 placement,
             )
@@ -180,16 +191,29 @@ impl Panels {
             self.card.set_material_hidden(self.reduce_transparency);
         }
 
-        // The dock grows or shrinks as items are added and removed.
+        // The dock grows or shrinks as items are added and removed, and
+        // moves when its edge changes.
         let target = if shown { frame } else { hidden_frame };
+        let moved = self.edge.is_some_and(|previous| previous != edge);
+        self.edge = Some(edge);
         if self.dock_frame != Some(frame) {
             let window = self.dock.window.clone();
             let first = self.dock_frame.is_none();
+            let animate = !accessibility.reduce_motion;
             self.dock_frame = Some(frame);
             self.dock
                 .resize_then(frame.width, frame.height, cx, move || {
-                    macos::slide_dock(&window, target, shown && !first, false);
+                    if moved && shown {
+                        // Tuck it into the new edge, then slide it out there.
+                        macos::slide_dock(&window, hidden_frame, false, false);
+                        macos::slide_dock(&window, frame, true, animate);
+                    } else {
+                        macos::slide_dock(&window, target, shown && !first, false);
+                    }
                 });
+            if moved {
+                self.shown = shown;
+            }
         }
         if shown != self.shown {
             self.shown = shown;
@@ -219,8 +243,8 @@ impl Panels {
                     Some(previous) => macos::CardEntry::Glide {
                         from: geometry::glide_start(previous.frame, frame, placement.side),
                     },
-                    None => macos::CardEntry::Appear {
-                        from: placement.side.toward_dock(motion::CARD_TRAVEL),
+                    None => macos::CardEntry::Pop {
+                        anchor: placement.arrow_tip(),
                     },
                 };
                 let window = self.card.window.clone();
@@ -234,11 +258,10 @@ impl Panels {
                     });
             }
             None => {
-                let drift = match (previous, motion) {
-                    (Some(previous), true) => previous.side.toward_dock(motion::CARD_TRAVEL / 2.0),
-                    _ => (0.0, 0.0),
-                };
-                macos::hide_card(&self.card.window, drift);
+                let anchor = previous
+                    .filter(|_| motion)
+                    .map(|previous| previous.arrow_tip());
+                macos::hide_card(&self.card.window, anchor);
             }
         }
     }
@@ -392,6 +415,100 @@ fn open_clipboard_history(
     .detach();
     state.borrow_mut().handle = Some(handle);
     Ok(())
+}
+
+/// The Settings window, while it is open, and the app that had focus.
+#[derive(Default)]
+struct SettingsState {
+    handle: Option<AnyWindowHandle>,
+    previous_app: Option<i32>,
+}
+
+fn open_settings(
+    dock: &Entity<Dock>,
+    state: &Rc<RefCell<SettingsState>>,
+    cx: &mut App,
+) -> Result<(), String> {
+    let existing = state.borrow().handle;
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        cx.activate(true);
+        return Ok(());
+    }
+
+    state.borrow_mut().previous_app = macos::frontmost_app();
+    cx.activate(true);
+    let (width, height) = settings_window::WINDOW_SIZE;
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(width), px(height)),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some(settings_window::Tab::General.title().into()),
+            appears_transparent: true,
+            traffic_light_position: None,
+        }),
+        is_resizable: false,
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let lookup: settings_window::PlaceLookup = std::sync::Arc::new(weather::search);
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| SettingsWindow::new(dock.clone(), lookup, window, cx))
+    })
+    .map_err(|err| err.to_string())?;
+    handle
+        .update(cx, |_, window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                root.style()
+                    .refine(&StyleRefinement::default().bg(transparent_black()));
+            });
+            if let Some(native) = macos::ns_window(window) {
+                macos::add_window_material(&native);
+                if !cx.reduce_motion() {
+                    macos::fade_in(&native);
+                }
+            }
+        })
+        .ok();
+
+    let state_for_events = state.clone();
+    cx.subscribe(&view, move |_, event: &SettingsEvent, cx| {
+        let (handle, previous) = {
+            let mut state = state_for_events.borrow_mut();
+            (state.handle.take(), state.previous_app.take())
+        };
+        // The close button already closes the window.
+        if *event == SettingsEvent::Dismiss
+            && let Some(handle) = handle
+        {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+        if let Some(pid) = previous {
+            macos::activate_app(pid);
+        }
+    })
+    .detach();
+    state.borrow_mut().handle = Some(handle);
+    Ok(())
+}
+
+/// Opens the settings file in the user's default text editor.
+fn open_config_file() {
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg("-t")
+        .arg(Config::path())
+        .spawn();
+    if let Err(err) = opened {
+        eprintln!("sidekick: couldn't open the settings file: {err}");
+    }
 }
 
 /// Global shortcuts, and which dock item each registered index opens.
@@ -602,7 +719,7 @@ fn run(cx: &mut App) -> Result<(), String> {
         macos::Backdrop::Card,
         |window, cx| cx.new(|cx| CardView::new(dock.clone(), chrome.clone(), window, cx)),
     )?;
-    macos::hide_card(&card_panel.window, (0.0, 0.0));
+    macos::hide_card(&card_panel.window, None);
 
     // Global shortcuts: each registered index maps to a dock item.
     let shortcuts: SharedShortcuts = Rc::new(RefCell::new(None));
@@ -662,18 +779,25 @@ fn run(cx: &mut App) -> Result<(), String> {
         handler.read(cx).reveal_in_finder(&action.id);
     });
 
+    let settings = Rc::new(RefCell::new(SettingsState::default()));
+    let (handler, state) = (dock.clone(), settings.clone());
+    cx.on_action(move |_: &OpenSettings, cx| {
+        if let Err(err) = open_settings(&handler, &state, cx) {
+            eprintln!("sidekick: couldn't open Settings: {err}");
+        }
+    });
+    cx.on_action(|_: &OpenConfigFile, _| open_config_file());
+
     let status = status_menu::StatusMenu::install({
         let cx = cx.to_async();
+        let (dock, settings) = (dock.clone(), settings.clone());
         move |command| match command {
-            status_menu::MenuCommand::OpenConfig => {
-                // Opens in the user's default text editor.
-                let opened = std::process::Command::new("/usr/bin/open")
-                    .arg("-t")
-                    .arg(Config::path())
-                    .spawn();
-                if let Err(err) = opened {
-                    eprintln!("sidekick: couldn't open the settings file: {err}");
-                }
+            status_menu::MenuCommand::OpenSettings => {
+                cx.update(|cx| {
+                    if let Err(err) = open_settings(&dock, &settings, cx) {
+                        eprintln!("sidekick: couldn't open Settings: {err}");
+                    }
+                });
             }
             status_menu::MenuCommand::Reload => {
                 relaunch();
@@ -691,6 +815,7 @@ fn run(cx: &mut App) -> Result<(), String> {
         chrome,
         shown: false,
         dock_frame: None,
+        edge: None,
         card_placement: None,
         reduce_transparency: false,
         _status: status,

@@ -1,6 +1,7 @@
-//! The menu-bar item: the one place to reach the clone's settings file,
+//! The menu-bar item: the one place to reach the clone's settings,
 //! launch at login, reload and quit, since the app has no Dock icon.
 
+use crate::platform::LoginItem;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -17,20 +18,9 @@ use std::cell::OnceCell;
 /// What a menu item asks the app to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuCommand {
-    OpenConfig,
+    OpenSettings,
     Reload,
     Quit,
-}
-
-/// Whether the app starts when the user logs in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LoginItem {
-    On,
-    Off,
-    /// Registered, but the user must allow it in System Settings.
-    NeedsApproval,
-    /// Only an app bundle can be a login item.
-    Unavailable,
 }
 
 pub struct Ivars {
@@ -48,9 +38,9 @@ define_class!(
     pub struct MenuTarget;
 
     impl MenuTarget {
-        #[unsafe(method(openConfig:))]
-        fn open_config(&self, _sender: Option<&AnyObject>) {
-            (self.ivars().handler)(MenuCommand::OpenConfig);
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: Option<&AnyObject>) {
+            (self.ivars().handler)(MenuCommand::OpenSettings);
         }
 
         #[unsafe(method(toggleLaunchAtLogin:))]
@@ -128,7 +118,7 @@ impl StatusMenu {
             menu.addItem(&item);
             item
         };
-        add("Open Settings File…", sel!(openConfig:), ",");
+        add("Settings…", sel!(openSettings:), ",");
         let login = add("Launch at Login", sel!(toggleLaunchAtLogin:), "");
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         add("Reload", sel!(reload:), "r");

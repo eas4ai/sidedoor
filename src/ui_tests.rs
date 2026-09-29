@@ -4,11 +4,13 @@
 use crate::{
     clipboard::{ClipKind, History},
     clipboard_window::{ClipboardWindow, ClipboardWindowEvent},
-    config::{Config, ItemConfig},
+    config::{Appearance, Config, ItemConfig},
     dock::{Dock, Services},
-    geometry::{self, Point},
-    platform::{Platform, fake::FakePlatform},
+    geometry::{self, Edge, Point},
+    platform::{LoginItem, Platform, fake::FakePlatform},
+    settings_window::{SettingsEvent, SettingsWindow, Tab},
     views::{CardChrome, CardView, DockView},
+    weather::Place,
 };
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, InputEvent as _, Modifiers,
@@ -711,4 +713,224 @@ fn recorder_cancels_with_escape_and_removes_existing(cx: &mut TestAppContext) {
         *events.borrow(),
         vec![RecorderEvent::Remove, RecorderEvent::Cancel]
     );
+}
+
+// MARK: Settings
+
+struct SettingsHarness {
+    platform: Rc<FakePlatform>,
+    dock: Entity<Dock>,
+    window: AnyWindowHandle,
+    view: Entity<SettingsWindow>,
+    events: Rc<std::cell::RefCell<Vec<SettingsEvent>>>,
+}
+
+fn place(name: &str, region: &str, latitude: f64) -> Place {
+    Place {
+        name: name.into(),
+        latitude,
+        longitude: 10.0,
+        region: Some(region.into()),
+        country: Some("Denmark".into()),
+    }
+}
+
+fn open_settings(cx: &mut TestAppContext, items: Vec<ItemConfig>) -> SettingsHarness {
+    let h = setup(cx, items);
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let lookup: crate::settings_window::PlaceLookup = std::sync::Arc::new(|query: &str| {
+        if query.eq_ignore_ascii_case("aal") {
+            Ok(vec![
+                place("Aalborg", "North Denmark", 57.05),
+                place("Aalestrup", "North Denmark", 56.69),
+            ])
+        } else {
+            Ok(Vec::new())
+        }
+    });
+    let (window, view) = cx.update(|cx| {
+        let (width, height) = crate::settings_window::WINDOW_SIZE;
+        let (window, view) = gpui_kit::open_window(options(width, height), cx, |window, cx| {
+            cx.new(|cx| SettingsWindow::new(h.dock.clone(), lookup, window, cx))
+        })
+        .unwrap();
+        let log = events.clone();
+        cx.subscribe(&view, move |_, event: &SettingsEvent, _| {
+            log.borrow_mut().push(*event);
+        })
+        .detach();
+        (window, view)
+    });
+    SettingsHarness {
+        platform: h.platform,
+        dock: h.dock,
+        window,
+        view,
+        events,
+    }
+}
+
+impl SettingsHarness {
+    fn click(&self, cx: &mut TestAppContext, id: impl Into<gpui_kit::ElementId>) {
+        let id = id.into();
+        cx.update_window(self.window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(id, cx);
+        })
+        .unwrap();
+    }
+
+    fn press(&self, cx: &mut TestAppContext, key: &str) {
+        cx.update_window(self.window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+        })
+        .unwrap();
+    }
+
+    fn tab(&self, cx: &mut TestAppContext) -> Tab {
+        cx.update(|cx| self.view.read(cx).tab())
+    }
+
+    fn item_ids(&self, cx: &mut TestAppContext) -> Vec<String> {
+        cx.update(|cx| {
+            self.dock
+                .read(cx)
+                .items
+                .iter()
+                .map(|item| item.id.to_string())
+                .collect()
+        })
+    }
+}
+
+#[gpui_kit::test]
+fn settings_tabs_switch_by_click_and_command_number(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![ItemConfig::Weather]);
+    assert_eq!(h.tab(cx), Tab::General);
+    h.click(cx, ("tab", 2usize));
+    assert_eq!(h.tab(cx), Tab::Items);
+    h.press(cx, "cmd-4");
+    assert_eq!(h.tab(cx), Tab::Weather);
+    h.press(cx, "cmd-2");
+    assert_eq!(h.tab(cx), Tab::Dock);
+    assert!(h.events.borrow().is_empty());
+    h.press(cx, "cmd-w");
+    assert_eq!(*h.events.borrow(), vec![SettingsEvent::Dismiss]);
+}
+
+#[gpui_kit::test]
+fn dock_settings_move_the_edge_and_change_the_theme(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![app("com.example.alpha")]);
+    h.press(cx, "cmd-2");
+    h.click(cx, "edge:Left");
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert_eq!(dock.edge, Edge::Left);
+        // It shows itself at the new edge.
+        assert!(dock.is_shown());
+        assert!(dock.frame().x < 100.0);
+    });
+    h.click(cx, "theme:Dark");
+    assert_eq!(*h.platform.appearance.borrow(), Some(Appearance::Dark));
+    let saved = h.platform.saved_configs.borrow();
+    let last = saved.last().unwrap();
+    assert_eq!(last.edge, Edge::Left);
+    assert_eq!(last.appearance, Appearance::Dark);
+}
+
+#[gpui_kit::test]
+fn general_settings_toggle_launch_at_login(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![ItemConfig::Clipboard]);
+    h.click(cx, "launch-at-login");
+    assert_eq!(*h.platform.login.borrow(), LoginItem::On);
+    h.click(cx, "launch-at-login");
+    assert_eq!(*h.platform.login.borrow(), LoginItem::Off);
+}
+
+#[gpui_kit::test]
+fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
+    let h = open_settings(
+        cx,
+        vec![
+            app("com.example.alpha"),
+            app("com.example.beta"),
+            ItemConfig::Weather,
+        ],
+    );
+    h.press(cx, "cmd-3");
+    h.click(cx, "remove:app:com.example.beta");
+    assert_eq!(h.item_ids(cx), ["app:com.example.alpha", "weather"]);
+
+    // Only missing widgets are offered.
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("add-widget:Weather").is_none());
+    })
+    .unwrap();
+    h.click(cx, "add-widget:Stats");
+    assert_eq!(
+        h.item_ids(cx),
+        ["app:com.example.alpha", "weather", "stats"]
+    );
+
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        window.drag_to("item-row:app:com.example.alpha", "item-row:stats", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        h.item_ids(cx),
+        ["weather", "stats", "app:com.example.alpha"]
+    );
+    let saved = h.platform.saved_configs.borrow();
+    assert_eq!(
+        saved.last().map(|config| config.items.clone()),
+        Some(vec![
+            ItemConfig::Weather,
+            ItemConfig::Stats,
+            app("com.example.alpha")
+        ])
+    );
+}
+
+#[gpui_kit::test]
+fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![ItemConfig::Weather]);
+    h.press(cx, "cmd-4");
+    cx.update_window(h.window, |_, window, cx| {
+        h.view.update(cx, |view, cx| view.focus_city(window, cx));
+    })
+    .unwrap();
+    cx.update_window(h.window, |_, window, cx| window.input("Aal", cx))
+        .unwrap();
+    // Nothing is looked up until typing pauses.
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("place", 0usize)).is_none());
+    })
+    .unwrap();
+    cx.executor().advance_clock(Duration::from_millis(350));
+    cx.run_until_parked();
+
+    h.click(cx, ("place", 0usize));
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert_eq!(dock.location.name, "Aalborg");
+        assert_eq!(dock.location.latitude, 57.05);
+    });
+    assert_eq!(
+        h.platform
+            .saved_configs
+            .borrow()
+            .last()
+            .map(|config| config.weather.name.clone()),
+        Some("Aalborg".into())
+    );
+    // The search resets once a place is chosen.
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("place", 0usize)).is_none());
+    })
+    .unwrap();
 }
