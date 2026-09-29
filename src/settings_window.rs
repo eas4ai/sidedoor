@@ -640,7 +640,7 @@ fn general_page(dock_entity: &Entity<Dock>, dock: &Dock, palette: Palette) -> Ve
     let login = dock.login_item();
     let detail: Option<SharedString> = match login {
         LoginItem::NeedsApproval => {
-            Some("Allow Sidekick Clone in System Settings › General › Login Items.".into())
+            Some("Allow Sidedoor in System Settings › General › Login Items.".into())
         }
         LoginItem::Unavailable => Some("Only the installed app can open at login.".into()),
         LoginItem::On | LoginItem::Off => None,
@@ -735,7 +735,7 @@ fn general_page(dock_entity: &Entity<Dock>, dock: &Dock, palette: Palette) -> Ve
             .text_size(px(text::SUBHEADLINE))
             .text_color(palette.tertiary)
             .child(format!(
-                "Sidekick Clone {} · Weather by Open-Meteo",
+                "Sidedoor {} · Weather by Open-Meteo",
                 env!("CARGO_PKG_VERSION")
             ))
             .into_any_element(),

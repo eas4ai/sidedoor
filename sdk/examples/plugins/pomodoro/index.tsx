@@ -8,15 +8,15 @@ import {
   Segmented,
   createStore,
   definePlugin,
-  sidekick,
+  sidedoor,
   useEffect,
   useInterval,
   useSetting,
-} from "@sidekick/sdk";
+} from "@sidedoor/sdk";
 
 const LENGTHS = [15, 25, 50];
 
-const initial = Number(sidekick.settings().length ?? 25);
+const initial = Number(sidedoor.settings().length ?? 25);
 const timer = createStore({ minutes: initial, left: initial * 60, running: false });
 
 const clock = (seconds: number) =>

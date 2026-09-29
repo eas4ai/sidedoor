@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { Button, Card, Meter, describe, useEffect, useState } from "@sidekick/sdk";
+import { Button, Card, Meter, describe, useEffect, useState } from "@sidedoor/sdk";
 import { diff, dispatch, renderSurfaces, reset, runEffects, setInvalidateHandler } from "../src/runtime";
 
 afterEach(() => {

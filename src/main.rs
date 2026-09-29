@@ -1,4 +1,4 @@
-//! A minimal Sidekick: a second dock that hides at a screen edge, with app
+//! Sidedoor: a second dock that hides at a screen edge, with app
 //! launchers and live Weather, Clipboard and Stats widgets.
 
 mod clipboard;
@@ -488,7 +488,7 @@ fn open_config_file() {
         .arg(Config::path())
         .spawn();
     if let Err(err) = opened {
-        eprintln!("sidekick: couldn't open the settings file: {err}");
+        eprintln!("sidedoor: couldn't open the settings file: {err}");
     }
 }
 
@@ -513,7 +513,7 @@ fn register_shortcuts(dock: &Entity<Dock>, shortcuts: &SharedShortcuts, cx: &mut
         .set(list.iter().map(|(_, shortcut)| shortcut.clone()).collect());
     for (index, err) in failures {
         let (id, shortcut) = &list[index];
-        eprintln!("sidekick: couldn't register {shortcut} for {id}: {err:?}");
+        eprintln!("sidedoor: couldn't register {shortcut} for {id}: {err:?}");
     }
 }
 
@@ -649,7 +649,7 @@ fn open_shortcut_recorder(
         }
         if let Some(shortcuts) = shortcuts.borrow_mut().as_mut() {
             for (index, err) in shortcuts.hotkeys.resume() {
-                eprintln!("sidekick: couldn't register shortcut {index}: {err:?}");
+                eprintln!("sidedoor: couldn't register shortcut {index}: {err:?}");
             }
         }
         if let Some(pid) = previous {
@@ -667,6 +667,7 @@ fn run(cx: &mut App) -> Result<(), String> {
 
     let platform: Rc<dyn Platform> = Rc::new(macos::MacPlatform::default());
     let screen = platform.main_screen().ok_or("no display found")?;
+    platform::migrate_old_name();
     let config = Config::load_or_create(|id| platform.app_by_bundle_id(id).is_some())
         .map_err(|err| format!("couldn't read {}: {err}", Config::path().display()))?;
     macos::set_appearance(config.appearance);
@@ -729,7 +730,7 @@ fn run(cx: &mut App) -> Result<(), String> {
     cx.subscribe(&dock, move |_, event, cx| match event {
         DockEvent::OpenClipboardHistory => {
             if let Err(err) = open_clipboard_history(&opener, &history_window, cx) {
-                eprintln!("sidekick: couldn't open Clipboard History: {err}");
+                eprintln!("sidedoor: couldn't open Clipboard History: {err}");
             }
         }
         DockEvent::ShortcutsChanged => register_shortcuts(&opener, &registry, cx),
@@ -740,7 +741,7 @@ fn run(cx: &mut App) -> Result<(), String> {
     let (handler, registry) = (dock.clone(), shortcuts.clone());
     cx.on_action(move |action: &AssignShortcut, cx| {
         if let Err(err) = open_shortcut_recorder(&action.id, &handler, &registry, &recorder, cx) {
-            eprintln!("sidekick: couldn't open the shortcut recorder: {err}");
+            eprintln!("sidedoor: couldn't open the shortcut recorder: {err}");
         }
     });
     let handler = dock.clone();
@@ -765,7 +766,7 @@ fn run(cx: &mut App) -> Result<(), String> {
     let (handler, state) = (dock.clone(), settings.clone());
     cx.on_action(move |_: &OpenSettings, cx| {
         if let Err(err) = open_settings(&handler, &state, cx) {
-            eprintln!("sidekick: couldn't open Settings: {err}");
+            eprintln!("sidedoor: couldn't open Settings: {err}");
         }
     });
     cx.on_action(|_: &OpenConfigFile, _| open_config_file());
@@ -777,7 +778,7 @@ fn run(cx: &mut App) -> Result<(), String> {
             status_menu::MenuCommand::OpenSettings => {
                 cx.update(|cx| {
                     if let Err(err) = open_settings(&dock, &settings, cx) {
-                        eprintln!("sidekick: couldn't open Settings: {err}");
+                        eprintln!("sidedoor: couldn't open Settings: {err}");
                     }
                 });
             }
@@ -820,7 +821,7 @@ fn relaunch() {
         .arg(exe)
         .spawn();
     if let Err(err) = spawned {
-        eprintln!("sidekick: couldn't relaunch: {err}");
+        eprintln!("sidedoor: couldn't relaunch: {err}");
     }
 }
 
@@ -830,7 +831,7 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(|cx| {
             if let Err(err) = run(cx) {
-                eprintln!("sidekick: {err}");
+                eprintln!("sidedoor: {err}");
                 cx.quit();
             }
         });

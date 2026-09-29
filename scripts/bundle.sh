@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds "Sidekick Clone.app" into target/release/bundle.
+# Builds "Sidedoor.app" into target/release/bundle.
 #
 #   scripts/bundle.sh            build the bundle
 #   scripts/bundle.sh --install  also copy it to /Applications and open it
@@ -11,9 +11,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-NAME="Sidekick Clone"
-BUNDLE_ID="com.lassevestergaard.sidekick-clone"
-EXECUTABLE="sidekick"
+NAME="Sidedoor"
+BUNDLE_ID="com.lassevestergaard.sidedoor"
+EXECUTABLE="sidedoor"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 
@@ -28,7 +28,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "target/release/$EXECUTABLE" "$APP/Contents/MacOS/$EXECUTABLE"
 
-# The plugin SDK, which plugins import as `@sidekick/sdk`.
+# The plugin SDK, which plugins import as `@sidedoor/sdk`.
 mkdir -p "$APP/Contents/Resources/sdk"
 cp -R sdk/package.json sdk/tsconfig.json sdk/README.md sdk/src "$APP/Contents/Resources/sdk/"
 
@@ -78,7 +78,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>A personal Sidekick-style dock.</string>
+    <string>A second dock at the edge of your screen.</string>
 </dict>
 </plist>
 PLIST

@@ -166,7 +166,7 @@ impl HotKeys {
             )
         };
         if status != 0 {
-            eprintln!("sidekick: couldn't listen for global shortcuts ({status})");
+            eprintln!("sidedoor: couldn't listen for global shortcuts ({status})");
         }
         Self {
             active: Vec::new(),

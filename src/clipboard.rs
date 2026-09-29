@@ -403,7 +403,7 @@ mod tests {
         for n in 0..(MAX_IMAGES + 3) {
             removed.extend(history.push(
                 ClipKind::Image {
-                    path: format!("/tmp/sidekick-test-{n}.png").into(),
+                    path: format!("/tmp/sidedoor-test-{n}.png").into(),
                     width: n as u32,
                     height: 1,
                 },
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn the_same_image_copied_twice_is_one_entry() {
-        let dir = std::env::temp_dir().join(format!("sidekick-dup-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sidedoor-dup-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (first, second, other) = (dir.join("1.png"), dir.join("2.png"), dir.join("3.png"));
         std::fs::write(&first, b"same pixels").unwrap();

@@ -41,10 +41,10 @@ function start(line: Start) {
   const worker = new Worker(new URL(`file://${line.entry}`).href, {
     env: {
       ...process.env,
-      SIDEKICK_PLUGIN: "1",
-      SIDEKICK_PLUGIN_ID: plugin,
-      SIDEKICK_DATA_DIR: line.data_dir,
-      SIDEKICK_SETTINGS: JSON.stringify(line.settings ?? {}),
+      SIDEDOOR_PLUGIN: "1",
+      SIDEDOOR_PLUGIN_ID: plugin,
+      SIDEDOOR_DATA_DIR: line.data_dir,
+      SIDEDOOR_SETTINGS: JSON.stringify(line.settings ?? {}),
     },
   } as WorkerOptions);
   // Only the current worker speaks for the plugin; a stopped one is silent.

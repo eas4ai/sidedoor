@@ -1,7 +1,7 @@
 {
-  "name": "@sidekick/sdk",
+  "name": "@sidedoor/sdk",
   "version": "0.1.0",
-  "description": "Write Sidekick Clone widgets in TSX, with GPUI's element and style names.",
+  "description": "Write Sidedoor widgets in TSX, with GPUI's element and style names.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

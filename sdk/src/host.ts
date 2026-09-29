@@ -45,7 +45,7 @@ const env = scope.process?.env ?? {};
 const state = {
   cardOpen: false,
   /** What the user saved; defaults fill the gaps. */
-  saved: parseSettings(env.SIDEKICK_SETTINGS),
+  saved: parseSettings(env.SIDEDOOR_SETTINGS),
   defaults: {} as Record<string, unknown>,
 };
 
@@ -71,20 +71,20 @@ export function useCardOpen(): boolean {
 }
 
 /**
- * A value from the plugin's settings, as declared under `sidekick.settings`
- * in its `package.json` and edited in Settings › Plugins.
+ * A value from the plugin's settings, as declared in `definePlugin` and
+ * edited in Settings › Plugins.
  */
 export function useSetting<T = unknown>(key: string): T {
   return (key in state.saved ? state.saved[key] : state.defaults[key]) as T;
 }
 
 /** Things a widget can ask the app to do. */
-export const sidekick = {
+export const sidedoor = {
   openUrl: (url: string) => send({ type: "open_url", url }),
   open: (path: string) => send({ type: "open_path", path }),
   copy: (text: string) => send({ type: "copy", text }),
   /** A folder the plugin can keep files in. */
-  dataDir: env.SIDEKICK_DATA_DIR ?? "",
+  dataDir: env.SIDEDOOR_DATA_DIR ?? "",
   /** The plugin's settings right now. */
   settings: (): Record<string, unknown> => ({ ...state.defaults, ...state.saved }),
 };
@@ -163,7 +163,7 @@ export function describe(definition: PluginDefinition): {
  * settings, all in one place. Inside the app it also starts the plugin.
  */
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
-  if (env.SIDEKICK_PLUGIN === "1") start(definition);
+  if (env.SIDEDOOR_PLUGIN === "1") start(definition);
   return definition;
 }
 

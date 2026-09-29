@@ -93,17 +93,45 @@ pub trait Platform {
     fn create_plugin(&self, name: &str) -> Result<Manifest, String>;
 }
 
-/// Where the clone keeps its files.
+/// Moves what the app kept under its old name, "Sidekick Clone", to where
+/// Sidedoor keeps it. Runs at launch, before anything is read.
+pub fn migrate_old_name() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let moves = [
+        (
+            home.join("Library/Application Support/SidekickClone"),
+            support_dir(),
+        ),
+        (home.join("Library/Caches/SidekickClone"), cache_dir()),
+    ];
+    for (old, new) in moves {
+        if old.exists()
+            && !new.exists()
+            && let Err(err) = std::fs::rename(&old, &new)
+        {
+            eprintln!("sidedoor: couldn't move {}: {err}", old.display());
+        }
+    }
+    // Clipboard history refers to copied images by path.
+    let history = History::path();
+    if let Ok(json) = std::fs::read_to_string(&history)
+        && json.contains("/SidekickClone/")
+    {
+        let _ = std::fs::write(&history, json.replace("/SidekickClone/", "/Sidedoor/"));
+    }
+}
+
+/// Where Sidedoor keeps its files.
 pub fn support_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
-        .join("Library/Application Support/SidekickClone")
+        .join("Library/Application Support/Sidedoor")
 }
 
 pub fn cache_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
-        .join("Library/Caches/SidekickClone")
+        .join("Library/Caches/Sidedoor")
 }
 
 #[cfg(test)]

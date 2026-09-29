@@ -1,5 +1,5 @@
 export * from "./components";
-export { definePlugin, describe, sidekick, useCardOpen, useSetting } from "./host";
+export { definePlugin, describe, sidedoor, useCardOpen, useSetting } from "./host";
 export type {
   HostMessage,
   Manifest,

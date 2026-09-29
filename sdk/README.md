@@ -1,6 +1,6 @@
-# @sidekick/sdk
+# @sidedoor/sdk
 
-Write Sidekick Clone widgets in TSX. Each plugin runs under [Bun](https://bun.sh)
+Write Sidedoor widgets in TSX. Each plugin runs under [Bun](https://bun.sh)
 in its own process. The app draws what it renders with real GPUI elements, so
 there's no web view. Element and style names are GPUI's own, so markup moves
 into the Rust UI with almost no changes:
@@ -17,11 +17,11 @@ div().flex().flex_col().gap(px(8.0)).px(px(12.0)).text_color(palette.secondary)
 
 The quickest start is **Settings › Plugins › New Plugin**. It creates a
 working widget, adds it to the dock and opens its code. By hand, a plugin is
-a folder in `~/Library/Application Support/SidekickClone/plugins/` with an
+a folder in `~/Library/Application Support/Sidedoor/plugins/` with an
 `index.tsx`, and everything about it lives in one `definePlugin` call:
 
 ```tsx
-import { Button, Card, definePlugin, useSetting, useState } from "@sidekick/sdk";
+import { Button, Card, definePlugin, useSetting, useState } from "@sidedoor/sdk";
 
 export default definePlugin({
   name: "Counter",
@@ -60,7 +60,7 @@ Items**. The app asks first, because a plugin runs with the same access as
 the app: your files, the network and other programs. Only add plugins from
 people you trust.
 
-The app links `@sidekick/sdk` into the plugin's `node_modules` and adds a
+The app links `@sidedoor/sdk` into the plugin's `node_modules` and adds a
 `tsconfig.json` if the plugin has none, so the plugin has nothing to install.
 Saving a file in the plugin reloads it. Errors show in its card, and
 `console.log` output shows in its log under **Settings › Plugins**.
@@ -166,7 +166,7 @@ them as native rows:
 
 Each setting takes `title`, `type`, and optionally `description` and
 `default` (otherwise `""`, `0`, `false` or the first option). Read a setting with `useSetting("key")` during render; the widget
-re-renders when it changes. Outside render, use `sidekick.settings()`.
+re-renders when it changes. Outside render, use `sidedoor.settings()`.
 
 ## Hooks and state
 
@@ -180,10 +180,10 @@ reordered.
 
 ## Asking the app
 
-- `sidekick.openUrl(url)`: opens a URL.
-- `sidekick.open(path)`: opens a file.
-- `sidekick.copy(text)`: copies text.
-- `sidekick.dataDir`: a folder the plugin can keep files in.
+- `sidedoor.openUrl(url)`: opens a URL.
+- `sidedoor.open(path)`: opens a file.
+- `sidedoor.copy(text)`: copies text.
+- `sidedoor.dataDir`: a folder the plugin can keep files in.
 
 Everything else, such as `fetch`, files and timers, is plain Bun.
 

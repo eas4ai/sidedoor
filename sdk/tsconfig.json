@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "@sidekick/sdk",
+    "jsxImportSource": "@sidedoor/sdk",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,

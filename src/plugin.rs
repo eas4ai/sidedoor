@@ -18,8 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// A plugin found on disk: a folder whose `package.json` has a `sidekick`
-/// section.
+/// A plugin found on disk: a folder whose `index.tsx` calls `definePlugin`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Manifest {
     /// The folder's name; stored in the dock config as `plugin:<id>`.
@@ -572,14 +571,23 @@ pub fn fingerprint(dir: &Path) -> u64 {
     hasher.finish()
 }
 
-/// Makes `@sidekick/sdk` importable from the plugin, and gives editors a
+/// Makes `@sidedoor/sdk` importable from the plugin, and gives editors a
 /// tsconfig, without the plugin having to install anything.
 fn prepare(dir: &Path, sdk: &Path) -> io::Result<()> {
-    let scope = dir.join("node_modules").join("@sidekick");
+    let scope = dir.join("node_modules").join("@sidedoor");
     let link = scope.join("sdk");
-    if fs::symlink_metadata(&link).is_err() {
-        fs::create_dir_all(&scope)?;
-        std::os::unix::fs::symlink(sdk, &link)?;
+    match fs::symlink_metadata(&link) {
+        // A link from before the app moved, or to another copy of it.
+        Ok(metadata) if metadata.is_symlink() && fs::read_link(&link)? != sdk => {
+            fs::remove_file(&link)?;
+            std::os::unix::fs::symlink(sdk, &link)?;
+        }
+        // Linked already, or installed by the plugin itself.
+        Ok(_) => {}
+        Err(_) => {
+            fs::create_dir_all(&scope)?;
+            std::os::unix::fs::symlink(sdk, &link)?;
+        }
     }
     let tsconfig = dir.join("tsconfig.json");
     if !tsconfig.exists() {
@@ -594,7 +602,7 @@ pub const TSCONFIG: &str = r#"{
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "@sidekick/sdk",
+    "jsxImportSource": "@sidedoor/sdk",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
@@ -640,9 +648,9 @@ pub fn create(dir: &Path, name: &str) -> io::Result<Manifest> {
     Manifest::read(&folder).ok_or_else(|| io::Error::other("the new plugin can't be read"))
 }
 
-const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useSetting, useState } from "@sidekick/sdk";
+const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useSetting, useState } from "@sidedoor/sdk";
 
-// Save this file and the card reloads. The @sidekick/sdk README lists
+// Save this file and the card reloads. The @sidedoor/sdk README lists
 // every element, component and style prop.
 export default definePlugin({
   name: TITLE,
@@ -682,7 +690,7 @@ pub fn sdk_dir() -> PathBuf {
 /// Finds Bun. Apps opened from Finder don't get the shell's `PATH`, so ask
 /// a login shell first, then try the usual install locations.
 pub fn find_bun() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("SIDEKICK_BUN") {
+    if let Some(path) = std::env::var_os("SIDEDOOR_BUN") {
         return Some(PathBuf::from(path));
     }
     let from_shell = Command::new("/bin/zsh")
@@ -796,12 +804,12 @@ mod tests {
 
     #[test]
     fn plugins_are_found_by_their_definition_without_running_them() {
-        let dir = std::env::temp_dir().join(format!("sidekick-plugin-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sidedoor-plugin-{}", std::process::id()));
         let plugin = dir.join("pomodoro");
         fs::create_dir_all(&plugin).unwrap();
         fs::write(
             plugin.join("index.tsx"),
-            r#"import { definePlugin } from "@sidekick/sdk";
+            r#"import { definePlugin } from "@sidedoor/sdk";
                const label = { name: "not this one" };
                export default definePlugin({
                  icon: 'timer',
@@ -866,7 +874,7 @@ mod tests {
 
     #[test]
     fn new_plugins_get_a_folder_and_a_working_template() {
-        let dir = std::env::temp_dir().join(format!("sidekick-new-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sidedoor-new-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let first = create(&dir, "My Widget!").unwrap();
         let second = create(&dir, "My Widget!").unwrap();

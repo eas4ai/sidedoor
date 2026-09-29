@@ -216,7 +216,7 @@ impl Dock {
             .filter_map(|(id, text)| match Shortcut::parse(text) {
                 Some(shortcut) => Some((id.clone(), shortcut)),
                 None => {
-                    eprintln!("sidekick: ignoring the shortcut \"{text}\" for {id}");
+                    eprintln!("sidedoor: ignoring the shortcut \"{text}\" for {id}");
                     None
                 }
             })
@@ -376,7 +376,7 @@ impl Dock {
             _ => return,
         };
         if let Err(err) = self.platform.open(&app.path) {
-            eprintln!("sidekick: couldn't open {}: {err}", app.name);
+            eprintln!("sidedoor: couldn't open {}: {err}", app.name);
         }
         // Show the running dot without waiting for the next poll.
         if self.running.insert(app.bundle_id.clone()) {
@@ -792,7 +792,7 @@ impl Dock {
 
     pub fn set_launch_at_login(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if let Err(err) = self.platform.set_launch_at_login(enabled) {
-            eprintln!("sidekick: couldn't change launch at login: {err}");
+            eprintln!("sidedoor: couldn't change launch at login: {err}");
         }
         cx.notify();
     }
@@ -889,7 +889,7 @@ impl Dock {
             plugin_settings: self.plugin_settings.clone(),
         };
         if let Err(err) = self.platform.save_config(&config) {
-            eprintln!("sidekick: couldn't save the dock: {err}");
+            eprintln!("sidedoor: couldn't save the dock: {err}");
         }
     }
 
@@ -923,7 +923,7 @@ impl Dock {
 
     pub fn open_path(&self, path: &std::path::Path) {
         if let Err(err) = self.platform.open(path) {
-            eprintln!("sidekick: couldn't open {}: {err}", path.display());
+            eprintln!("sidedoor: couldn't open {}: {err}", path.display());
         }
     }
 
@@ -979,7 +979,7 @@ impl Dock {
 
     fn save_history(&self) {
         if let Err(err) = self.platform.save_history(&self.history) {
-            eprintln!("sidekick: couldn't save clipboard history: {err}");
+            eprintln!("sidedoor: couldn't save clipboard history: {err}");
         }
     }
 
@@ -1144,7 +1144,7 @@ fn resolve_items(
                 ItemConfig::App { bundle_id } => match platform.app_by_bundle_id(bundle_id) {
                     Some(app) => DockItem::app(app),
                     None => {
-                        eprintln!("sidekick: skipping {bundle_id}, it isn't installed");
+                        eprintln!("sidedoor: skipping {bundle_id}, it isn't installed");
                         return None;
                     }
                 },
@@ -1155,7 +1155,7 @@ fn resolve_items(
                     match plugins.iter().find(|manifest| &manifest.id == id) {
                         Some(manifest) => DockItem::plugin(manifest.clone()),
                         None => {
-                            eprintln!("sidekick: skipping plugin {id}, it isn't installed");
+                            eprintln!("sidedoor: skipping plugin {id}, it isn't installed");
                             return None;
                         }
                     }

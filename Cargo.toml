@@ -1,8 +1,8 @@
 [package]
-name = "sidekick"
+name = "sidedoor"
 version = "0.1.0"
 edition = "2024"
-description = "A minimal Sidekick-style edge dock for macOS, built with GPUI Kit."
+description = "Sidedoor: a second dock at the edge of your screen, for macOS, built with GPUI Kit."
 publish = false
 
 [dependencies]

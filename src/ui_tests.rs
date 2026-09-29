@@ -488,7 +488,7 @@ fn history_window_filter_segments_narrow_by_type(cx: &mut TestAppContext) {
 fn image_previews_fit_their_frame(cx: &mut TestAppContext) {
     let h = open_history(cx, &[]);
     h.platform.copy(ClipKind::Image {
-        path: "/tmp/sidekick-missing.png".into(),
+        path: "/tmp/sidedoor-missing.png".into(),
         width: 512,
         height: 512,
     });

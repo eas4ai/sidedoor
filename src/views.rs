@@ -45,42 +45,42 @@ const CLIP_ROW: f64 = 46.0;
 
 /// Dispatched by the dock's context menu.
 #[derive(Clone, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct OpenItem {
     pub id: SharedString,
 }
 
 #[derive(Clone, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct RevealItem {
     pub id: SharedString,
 }
 
 #[derive(Clone, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct RemoveItem {
     pub id: SharedString,
 }
 
 #[derive(Clone, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct AssignShortcut {
     pub id: SharedString,
 }
 
 #[derive(Clone, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct RemoveShortcut {
     pub id: SharedString,
 }
 
 #[derive(Clone, Default, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct OpenSettings;
 
 /// Opens the settings file in the user's text editor.
 #[derive(Clone, Default, PartialEq, Action)]
-#[action(namespace = sidekick, no_json)]
+#[action(namespace = sidedoor, no_json)]
 pub struct OpenConfigFile;
 
 /// Size of the card or tooltip for `item`, arrow excluded. `text_width`

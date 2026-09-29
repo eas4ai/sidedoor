@@ -33,7 +33,7 @@ define_class!(
     // does not implement `Drop`.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "SidekickCloneMenuTarget"]
+    #[name = "SidedoorMenuTarget"]
     #[ivars = Ivars]
     pub struct MenuTarget;
 
@@ -47,7 +47,7 @@ define_class!(
         fn toggle_launch_at_login(&self, _sender: Option<&AnyObject>) {
             let enable = matches!(crate::macos::login_item(), LoginItem::Off);
             if let Err(err) = crate::macos::set_launch_at_login(enable) {
-                eprintln!("sidekick: couldn't change launch at login: {err}");
+                eprintln!("sidedoor: couldn't change launch at login: {err}");
             }
             self.refresh_login_item();
         }
@@ -122,7 +122,7 @@ impl StatusMenu {
         let login = add("Launch at Login", sel!(toggleLaunchAtLogin:), "");
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         add("Reload", sel!(reload:), "r");
-        add("Quit Sidekick Clone", sel!(quit:), "q");
+        add("Quit Sidedoor", sel!(quit:), "q");
         let _ = target.ivars().login_item.set(login);
         target.refresh_login_item();
 
@@ -130,7 +130,7 @@ impl StatusMenu {
         if let Some(button) = item.button(mtm) {
             let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str("sidebar.right"),
-                Some(&NSString::from_str("Sidekick Clone")),
+                Some(&NSString::from_str("Sidedoor")),
             );
             if let Some(image) = image {
                 image.setTemplate(true);
