@@ -277,9 +277,11 @@ impl Render for ShortcutRecorder {
             (None, Some(_)) => div()
                 .text_color(palette.secondary)
                 .child("Press Return to save it."),
-            (None, None) => div()
-                .text_color(palette.secondary)
-                .child("Use ⌘, ⌥ or ⌃ with any key, or an F-key on its own."),
+            (None, None) => div().text_color(palette.secondary).child(if cfg!(windows) {
+                "Use Ctrl, Alt or Win with any key, or an F-key on its own."
+            } else {
+                "Use ⌘, ⌥ or ⌃ with any key, or an F-key on its own."
+            }),
         };
 
         let (save, cancel, remove) = (view.clone(), view.clone(), view);

@@ -1,9 +1,9 @@
 //! Current conditions and an hourly strip from Open-Meteo (no API key).
 
 use crate::config::WeatherLocation;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Weather {
     pub temperature: f64,
     pub high: f64,
@@ -13,7 +13,7 @@ pub struct Weather {
     pub hours: Vec<Hour>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Hour {
     /// Local hour of day, 0–23.
     pub hour: u32,
@@ -21,7 +21,8 @@ pub struct Hour {
     pub condition: Condition,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Condition {
     Clear,
     PartlyCloudy,

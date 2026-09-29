@@ -19,6 +19,7 @@ export type ColorToken =
   | "orange"
   | "red"
   | "purple"
+  | "purple_deep"
   | "transparent";
 
 /** A palette token, or `#rgb`, `#rrggbb` or `#rrggbbaa`. */
@@ -37,6 +38,13 @@ export type IconName = string;
 
 /** GPUI `Styled` methods, as props. Booleans are the no-argument methods. */
 export interface StyleProps {
+  /** Scales this node's point sizes with dock hover magnification (tile only). */
+  magnify?: boolean;
+  /** A native gradient; angle is in degrees. */
+  bg_gradient?: { from: Color; to: Color; angle?: number };
+  /** Entry motion for a div; its stable id controls when it restarts. */
+  enter?: { kind: "rise" | "pop"; duration?: number; delay?: number };
+
   // Display and flexbox
   flex?: boolean;
   flex_col?: boolean;
@@ -220,7 +228,19 @@ export interface SegmentedProps extends StyleProps {
   on_change: (index: number) => void;
 }
 
+export interface NumberTextProps extends StyleProps {
+  id: string;
+  value: number;
+  suffix?: string;
+  duration?: number;
+}
+
 export interface MeterProps extends StyleProps {
+  id?: string;
+  /** Ease the numeric label and spring the gauge on the host's animation clock. */
+  animated?: boolean;
+  value_number?: number;
+  value_suffix?: string;
   label: string;
   /** 0 to 1. */
   fraction: number;
@@ -241,6 +261,28 @@ export interface SparklineProps extends StyleProps {
   /** 0 to 1 each. */
   values: number[];
   color?: Color;
+}
+
+/** One point of a `Chart`. */
+export interface ChartPoint {
+  label: string;
+  value: number;
+}
+
+export interface ChartProps extends StyleProps {
+  /** `line` by default. */
+  kind?: "line" | "area" | "bar";
+  data: ChartPoint[];
+  /** The line, area or bars; `blue` by default. */
+  color?: Color;
+  /** The series name in the hover tooltip. */
+  name?: string;
+  /** Labels along the bottom; on by default. */
+  x_axis?: boolean;
+  /** Values along the side; off by default. */
+  y_axis?: boolean;
+  /** Horizontal grid lines; off by default. */
+  grid?: boolean;
 }
 
 export interface InputProps extends StyleProps {
@@ -268,7 +310,7 @@ export interface SvgProps extends StyleProps {
 }
 
 export interface ImgProps extends StyleProps {
-  /** An absolute file path. */
+  /** An absolute file path, or an `https://` URL the app downloads and caches. */
   src: string;
   object_fit?: "contain" | "cover" | "fill";
 }

@@ -6,7 +6,10 @@ use crate::{
     config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation},
     geometry::{self, Edge, Rect, Reveal, Screen},
     platform::{Accessibility, AppInfo, LoginItem, Platform},
-    plugin::{HostMessage, Manifest, Node, PluginLink, PluginMessage, apply_patches},
+    plugin::{
+        ClipboardCommand, DataSource, HostMessage, Manifest, Node, PluginLink, PluginMessage,
+        apply_patches,
+    },
     shortcut::Shortcut,
     stats::{Sampler, Snapshot},
     weather::{self, Weather},
@@ -14,7 +17,7 @@ use crate::{
 use futures::StreamExt as _;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
@@ -42,9 +45,6 @@ pub struct DockItem {
 
 pub enum ItemKind {
     App(AppInfo),
-    Weather,
-    Stats,
-    Clipboard,
     Plugin(Manifest),
 }
 
@@ -63,29 +63,11 @@ impl DockItem {
         }
     }
 
-    fn widget(kind: ItemKind) -> Self {
-        let id = match kind {
-            ItemKind::Weather => "weather",
-            ItemKind::Stats => "stats",
-            ItemKind::Clipboard => "clipboard",
-            ItemKind::App(_) | ItemKind::Plugin(_) => {
-                unreachable!("apps and plugins have their own constructors")
-            }
-        };
-        Self {
-            id: id.into(),
-            kind,
-        }
-    }
-
     fn config(&self) -> ItemConfig {
         match &self.kind {
             ItemKind::App(app) => ItemConfig::App {
                 bundle_id: app.bundle_id.clone(),
             },
-            ItemKind::Weather => ItemConfig::Weather,
-            ItemKind::Stats => ItemConfig::Stats,
-            ItemKind::Clipboard => ItemConfig::Clipboard,
             ItemKind::Plugin(manifest) => ItemConfig::Plugin {
                 id: manifest.id.clone(),
             },
@@ -97,6 +79,10 @@ impl DockItem {
 pub struct PluginState {
     pub tile: Option<Vec<Node>>,
     pub card: Option<Vec<Node>>,
+    /// What each open window shows, by the window's key.
+    pub windows: HashMap<String, Vec<Node>>,
+    /// Windows open on screen; they stay open across a reload.
+    pub open_windows: BTreeSet<String>,
     /// Why it isn't drawing, e.g. a compile error.
     pub problem: Option<SharedString>,
     /// Recent `console.log` lines and errors, oldest first.
@@ -104,6 +90,7 @@ pub struct PluginState {
     /// The card's content height as last drawn, for cards that fit it.
     pub height: Option<f64>,
     link: Option<Box<dyn PluginLink>>,
+    data: HashMap<DataSource, serde_json::Value>,
     /// The plugin's files when it started; a change reloads it.
     fingerprint: u64,
     _task: Option<Task<()>>,
@@ -128,19 +115,29 @@ impl Widget {
         }
     }
 
-    fn item(self) -> DockItem {
-        DockItem::widget(match self {
-            Self::Weather => ItemKind::Weather,
-            Self::Clipboard => ItemKind::Clipboard,
-            Self::Stats => ItemKind::Stats,
-        })
+    fn id(self) -> &'static str {
+        match self {
+            Self::Weather => crate::builtins::WEATHER,
+            Self::Clipboard => crate::builtins::CLIPBOARD,
+            Self::Stats => crate::builtins::STATS,
+        }
     }
 }
 
 /// Requests the dock makes of the app around it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DockEvent {
     OpenClipboardHistory,
+    /// A plugin asked for one of its windows.
+    OpenPluginWindow {
+        plugin: String,
+        key: String,
+    },
+    /// A plugin closed one of its windows, or stopped.
+    ClosePluginWindow {
+        plugin: String,
+        key: String,
+    },
     /// Shortcuts were assigned or removed; re-register them.
     ShortcutsChanged,
 }
@@ -202,14 +199,22 @@ pub struct Dock {
 
 impl Dock {
     pub fn new(
-        config: Config,
+        mut config: Config,
         platform: Rc<dyn Platform>,
         screen: Screen,
         history: History,
         services: Services,
         cx: &mut Context<Self>,
     ) -> Self {
-        let items = resolve_items(&config.items, platform.as_ref(), &platform.plugins());
+        config.migrate_builtins();
+        let mut manifests = crate::builtins::manifests();
+        manifests.extend(
+            platform
+                .plugins()
+                .into_iter()
+                .filter(|m| !m.id.starts_with("builtin.")),
+        );
+        let items = resolve_items(&config.items, platform.as_ref(), &manifests);
         let shortcuts = config
             .shortcuts
             .iter()
@@ -275,7 +280,10 @@ impl Dock {
     /// Starts the plugins in the dock; call once the dock is an entity.
     pub fn start_plugins(&mut self, cx: &mut Context<Self>) {
         // Tell a plugin when its card opens and closes, whatever caused it.
-        self._observe_self = Some(cx.observe_self(|this, _| this.sync_open_plugin()));
+        self._observe_self = Some(cx.observe_self(|this, _| {
+            this.sync_open_plugin();
+            this.sync_plugin_data();
+        }));
         let manifests: Vec<Manifest> = self
             .items
             .iter()
@@ -369,10 +377,6 @@ impl Dock {
     pub fn activate(&mut self, index: usize, cx: &mut Context<Self>) {
         let app = match self.items.get(index).map(|item| &item.kind) {
             Some(ItemKind::App(app)) => app,
-            Some(ItemKind::Clipboard) => {
-                self.show_clipboard_history(cx);
-                return;
-            }
             Some(ItemKind::Plugin(manifest)) => {
                 if manifest.clickable {
                     let id = manifest.id.clone();
@@ -388,6 +392,22 @@ impl Dock {
         // Show the running dot without waiting for the next poll.
         if self.running.insert(app.bundle_id.clone()) {
             cx.notify();
+        }
+    }
+
+    /// A plugin window closed, by its close button or the plugin's word.
+    pub fn plugin_window_closed(&mut self, plugin: &str, key: &str) {
+        let Some(state) = self.plugins.get_mut(plugin) else {
+            return;
+        };
+        if state.open_windows.remove(key) {
+            state.windows.remove(key);
+            if let Some(link) = state.link.as_mut() {
+                link.send(&HostMessage::Window {
+                    key: key.to_string(),
+                    open: false,
+                });
+            }
         }
     }
 
@@ -471,7 +491,14 @@ impl Dock {
             let item = self.items.remove(index);
             if let ItemKind::Plugin(manifest) = &item.kind {
                 // Dropping its state stops the process.
-                self.plugins.remove(&manifest.id);
+                if let Some(state) = self.plugins.remove(&manifest.id) {
+                    for key in state.open_windows {
+                        cx.emit(DockEvent::ClosePluginWindow {
+                            plugin: manifest.id.clone(),
+                            key,
+                        });
+                    }
+                }
             }
             if self.shortcuts.remove(id).is_some() {
                 cx.emit(DockEvent::ShortcutsChanged);
@@ -482,20 +509,18 @@ impl Dock {
 
     /// Adds a widget the dock doesn't have yet, at the end.
     pub fn add_widget(&mut self, widget: Widget, cx: &mut Context<Self>) -> bool {
-        let item = widget.item();
-        if self.items.len() >= MAX_ITEMS || self.index_of(&item.id).is_some() {
-            return false;
-        }
-        self.items.push(item);
-        self.items_changed(cx);
-        true
+        let manifest = crate::builtins::manifests()
+            .into_iter()
+            .find(|manifest| manifest.id == widget.id())
+            .expect("built-in plugin");
+        self.add_plugin(manifest, cx)
     }
 
     /// Widgets that could still be added.
     pub fn missing_widgets(&self) -> Vec<Widget> {
         Widget::ALL
             .into_iter()
-            .filter(|widget| self.index_of(&widget.item().id).is_none())
+            .filter(|widget| self.index_of(&format!("plugin:{}", widget.id())).is_none())
             .collect()
     }
 
@@ -509,9 +534,16 @@ impl Dock {
         };
         // A reload keeps showing what the plugin last drew until it draws again.
         let old = self.plugins.remove(&manifest.id);
-        let (tile, card, logs, height) = match old {
-            Some(old) => (old.tile, old.card, old.logs, old.height),
-            None => (None, None, VecDeque::new(), None),
+        let (tile, card, windows, open_windows, logs, height) = match old {
+            Some(old) => (
+                old.tile,
+                old.card,
+                old.windows,
+                old.open_windows,
+                old.logs,
+                old.height,
+            ),
+            None => Default::default(),
         };
         let settings = self.plugin_values(manifest);
         let state = match self.platform.start_plugin(manifest, &settings) {
@@ -528,13 +560,24 @@ impl Dock {
                         }
                     }
                 });
+                let mut link = connection.link;
+                // Windows still on screen from before a reload draw again.
+                for key in &open_windows {
+                    link.send(&HostMessage::Window {
+                        key: key.clone(),
+                        open: true,
+                    });
+                }
                 PluginState {
                     tile,
                     card,
+                    windows,
+                    open_windows,
                     problem: None,
                     logs,
                     height,
-                    link: Some(connection.link),
+                    link: Some(link),
+                    data: HashMap::new(),
                     fingerprint,
                     _task: Some(task),
                 }
@@ -542,23 +585,54 @@ impl Dock {
             Err(problem) => PluginState {
                 tile,
                 card,
+                windows,
+                open_windows,
                 problem: Some(problem.into()),
                 logs,
                 height,
                 link: None,
+                data: HashMap::new(),
                 fingerprint,
                 _task: None,
             },
         };
         self.plugins.insert(manifest.id.clone(), state);
+        // A restarted worker needs the current card state even if the pointer
+        // has not moved, as well as a fresh copy of every subscribed feed.
+        let open = self
+            .card()
+            .is_some_and(|(_, item)| item.id.as_ref() == format!("plugin:{}", manifest.id));
+        if open {
+            self.send_plugin(&manifest.id, &HostMessage::Card { open });
+        }
+        self.sync_plugin_data();
     }
 
     fn plugin_message(&mut self, id: &str, message: PluginMessage, cx: &mut Context<Self>) {
+        let had_weather = self.wants_data(DataSource::Weather);
         let Some(state) = self.plugins.get_mut(id) else {
             return;
         };
         match message {
+            PluginMessage::Clipboard { command } => {
+                // Clipboard access is opt-in, just like the live history feed.
+                if !self.items.iter().any(|item| {
+                    matches!(&item.kind,
+                    ItemKind::Plugin(m) if m.id == id && m.data.contains(&DataSource::Clipboard))
+                }) {
+                    return;
+                }
+                match command {
+                    ClipboardCommand::ShowHistory => self.show_clipboard_history(cx),
+                    ClipboardCommand::CopyEntry { id } => self.copy_entry(id, cx),
+                    ClipboardCommand::RequestClear => self.request_clear_history(cx),
+                }
+                return;
+            }
             PluginMessage::Manifest(described) => {
+                state
+                    .data
+                    .retain(|source, _| described.data.contains(source));
                 // The running plugin's own word on its name, look and settings.
                 for item in &mut self.items {
                     if let ItemKind::Plugin(manifest) = &mut item.kind
@@ -567,18 +641,29 @@ impl Dock {
                         manifest.update(described.clone());
                     }
                 }
+                if self.live && !had_weather && self.wants_data(DataSource::Weather) {
+                    self.weather_task = Some(Self::weather_task(self.location.clone(), cx));
+                }
             }
             PluginMessage::Render { surface, tree } => {
                 match surface.as_str() {
                     "tile" => state.tile = Some(tree),
-                    _ => state.card = Some(tree),
+                    "card" => state.card = Some(tree),
+                    other => {
+                        if let Some(key) = other.strip_prefix("window:") {
+                            state.windows.insert(key.to_string(), tree);
+                        }
+                    }
                 }
                 state.problem = None;
             }
             PluginMessage::Patch { surface, patches } => {
                 let tree = match surface.as_str() {
                     "tile" => state.tile.as_mut(),
-                    _ => state.card.as_mut(),
+                    "card" => state.card.as_mut(),
+                    other => other
+                        .strip_prefix("window:")
+                        .and_then(|key| state.windows.get_mut(key)),
                 };
                 let applied = tree.is_some_and(|tree| apply_patches(tree, patches));
                 if !applied {
@@ -621,6 +706,43 @@ impl Dock {
             }
             PluginMessage::Copy { text } => {
                 self.platform.write_pasteboard(&ClipKind::Text { text });
+                return;
+            }
+            PluginMessage::OpenWindow { key } => {
+                let declared = self.items.iter().any(|item| match &item.kind {
+                    ItemKind::Plugin(manifest) => {
+                        manifest.id == id && manifest.windows.iter().any(|w| w.key == key)
+                    }
+                    _ => false,
+                });
+                if !declared {
+                    push_log(
+                        &mut state.logs,
+                        &format!("error: openWindow(\"{key}\"): no such window in definePlugin"),
+                    );
+                    cx.notify();
+                    return;
+                }
+                if state.open_windows.insert(key.clone())
+                    && let Some(link) = state.link.as_mut()
+                {
+                    link.send(&HostMessage::Window {
+                        key: key.clone(),
+                        open: true,
+                    });
+                }
+                cx.emit(DockEvent::OpenPluginWindow {
+                    plugin: id.to_string(),
+                    key,
+                });
+                return;
+            }
+            PluginMessage::CloseWindow { key } => {
+                self.plugin_window_closed(id, &key);
+                cx.emit(DockEvent::ClosePluginWindow {
+                    plugin: id.to_string(),
+                    key,
+                });
                 return;
             }
             PluginMessage::Notify { title, body } => {
@@ -765,9 +887,14 @@ impl Dock {
 
     /// Installed plugins that aren't in the dock.
     pub fn available_plugins(&self) -> Vec<Manifest> {
-        self.platform
-            .plugins()
+        crate::builtins::manifests()
             .into_iter()
+            .chain(
+                self.platform
+                    .plugins()
+                    .into_iter()
+                    .filter(|manifest| !manifest.id.starts_with("builtin.")),
+            )
             .filter(|manifest| self.index_of(&format!("plugin:{}", manifest.id)).is_none())
             .collect()
     }
@@ -777,7 +904,13 @@ impl Dock {
         if self.items.len() >= MAX_ITEMS || self.index_of(&item.id).is_some() {
             return false;
         }
+        let start_weather = self.live
+            && !self.wants_data(DataSource::Weather)
+            && manifest.data.contains(&DataSource::Weather);
         self.items.push(item);
+        if start_weather {
+            self.weather_task = Some(Self::weather_task(self.location.clone(), cx));
+        }
         self.start_plugin(&manifest, cx);
         self.items_changed(cx);
         true
@@ -863,9 +996,6 @@ impl Dock {
     pub fn item_name(&self, id: &str) -> String {
         match self.index_of(id).map(|index| &self.items[index].kind) {
             Some(ItemKind::App(app)) => app.name.clone(),
-            Some(ItemKind::Weather) => "Weather".into(),
-            Some(ItemKind::Stats) => "Stats".into(),
-            Some(ItemKind::Clipboard) => "Clipboard".into(),
             Some(ItemKind::Plugin(manifest)) => manifest.name.clone(),
             None => id.to_string(),
         }
@@ -892,10 +1022,10 @@ impl Dock {
             return;
         };
         match &self.items[index].kind {
-            ItemKind::App(_) | ItemKind::Clipboard => self.activate(index, cx),
+            ItemKind::App(_) => self.activate(index, cx),
             // A plugin that handles clicks gets the shortcut as a click.
             ItemKind::Plugin(manifest) if manifest.clickable => self.activate(index, cx),
-            ItemKind::Weather | ItemKind::Stats | ItemKind::Plugin(_) => self.peek(index, cx),
+            ItemKind::Plugin(_) => self.peek(index, cx),
         }
     }
 
@@ -1022,8 +1152,48 @@ impl Dock {
         }
     }
 
-    fn has(&self, predicate: impl Fn(&ItemKind) -> bool) -> bool {
-        self.items.iter().any(|item| predicate(&item.kind))
+    fn wants_data(&self, source: DataSource) -> bool {
+        self.items.iter().any(|item| {
+            matches!(&item.kind,
+            ItemKind::Plugin(manifest) if manifest.data.contains(&source))
+        })
+    }
+
+    /// Broadcasts only changed feeds, and only to plugins that requested them.
+    fn sync_plugin_data(&mut self) {
+        let mut feeds = HashMap::new();
+        for source in [
+            DataSource::Weather,
+            DataSource::Stats,
+            DataSource::Clipboard,
+        ] {
+            if self.wants_data(source) {
+                feeds.insert(source, crate::plugin_data::snapshot(self, source));
+            }
+        }
+        for item in &self.items {
+            let ItemKind::Plugin(manifest) = &item.kind else {
+                continue;
+            };
+            let Some(state) = self.plugins.get_mut(&manifest.id) else {
+                continue;
+            };
+            let Some(link) = state.link.as_mut() else {
+                continue;
+            };
+            for source in &manifest.data {
+                let Some(value) = feeds.get(source) else {
+                    continue;
+                };
+                if state.data.get(source) != Some(value) {
+                    link.send(&HostMessage::Data {
+                        source: *source,
+                        value: value.clone(),
+                    });
+                    state.data.insert(*source, value.clone());
+                }
+            }
+        }
     }
 
     // MARK: Polling
@@ -1073,7 +1243,7 @@ impl Dock {
     }
 
     fn poll_stats(&mut self, cx: &mut Context<Self>) {
-        if !self.has(|kind| matches!(kind, ItemKind::Stats)) {
+        if !self.wants_data(DataSource::Stats) {
             return;
         }
         if let Some(sampler) = &mut self.sampler {
@@ -1084,7 +1254,7 @@ impl Dock {
     }
 
     pub fn poll_pasteboard(&mut self, cx: &mut Context<Self>) {
-        if !self.has(|kind| matches!(kind, ItemKind::Clipboard)) {
+        if !self.wants_data(DataSource::Clipboard) {
             return;
         }
         let count = self.platform.pasteboard_change_count();
@@ -1102,9 +1272,7 @@ impl Dock {
         cx.spawn(async move |this, cx| {
             loop {
                 let wanted = this
-                    .update(cx, |this, _| {
-                        this.has(|kind| matches!(kind, ItemKind::Weather))
-                    })
+                    .update(cx, |this, _| this.wants_data(DataSource::Weather))
                     .unwrap_or(false);
                 let delay = if wanted {
                     let request = location.clone();
@@ -1187,9 +1355,9 @@ fn resolve_items(
                         return None;
                     }
                 },
-                ItemConfig::Weather => DockItem::widget(ItemKind::Weather),
-                ItemConfig::Stats => DockItem::widget(ItemKind::Stats),
-                ItemConfig::Clipboard => DockItem::widget(ItemKind::Clipboard),
+                ItemConfig::Weather | ItemConfig::Stats | ItemConfig::Clipboard => {
+                    unreachable!("migrated above")
+                }
                 ItemConfig::Plugin { id } => {
                     match plugins.iter().find(|manifest| &manifest.id == id) {
                         Some(manifest) => DockItem::plugin(manifest.clone()),

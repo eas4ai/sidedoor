@@ -13,6 +13,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub const REVEAL_LABEL: &str = if cfg!(windows) {
+    "Show in File Explorer"
+} else {
+    "Show in Finder"
+};
+pub const COMPUTER_NAME: &str = if cfg!(windows) { "PC" } else { "Mac" };
+
 /// An installed app, as shown in the dock.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppInfo {
@@ -46,6 +53,7 @@ pub enum LoginItem {
     #[default]
     Off,
     /// Registered, but the user must allow it in System Settings.
+    #[cfg_attr(target_os = "windows", allow(dead_code))] // macOS login-item approval state
     NeedsApproval,
     /// Only an app bundle can be a login item.
     Unavailable,
@@ -99,6 +107,7 @@ pub trait Platform {
 
 /// Moves what the app kept under its old name, "Sidekick Clone", to where
 /// Sidedoor keeps it. Runs at launch, before anything is read.
+#[cfg(target_os = "macos")]
 pub fn migrate_old_name() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
     let moves = [
@@ -125,17 +134,57 @@ pub fn migrate_old_name() {
     }
 }
 
-/// Where Sidedoor keeps its files.
+#[cfg(not(target_os = "macos"))]
+pub fn migrate_old_name() {}
+
+/// Writable per-user data, independent of the installation directory.
 pub fn support_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    return windows_data_dir("APPDATA").join("Sidedoor");
+    #[cfg(not(target_os = "windows"))]
     std::env::var_os("HOME")
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
         .join("Library/Application Support/Sidedoor")
 }
 
 pub fn cache_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    return windows_data_dir("LOCALAPPDATA").join("Sidedoor/Cache");
+    #[cfg(not(target_os = "windows"))]
     std::env::var_os("HOME")
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
         .join("Library/Caches/Sidedoor")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_data_dir(variable: &str) -> PathBuf {
+    std::env::var_os(variable)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .expect("Windows user profile is unavailable");
+            home.join(if variable == "APPDATA" {
+                "AppData/Roaming"
+            } else {
+                "AppData/Local"
+            })
+        })
+}
+
+/// Read-only assets shipped alongside the executable on Windows, or in
+/// Contents/Resources on macOS. Development builds use repository assets.
+pub fn bundled_resource(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_resource_at(&exe, name).filter(|path| path.is_dir())
+}
+
+fn bundled_resource_at(exe: &Path, name: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let resources = exe.parent()?.join("resources");
+    #[cfg(not(target_os = "windows"))]
+    let resources = exe.parent()?.parent()?.join("Resources");
+    Some(resources.join(name))
 }
 
 #[cfg(test)]
@@ -151,6 +200,7 @@ pub mod fake {
     struct Recorder {
         id: String,
         sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
+        native: Option<NativePlugin>,
     }
 
     impl PluginLink for Recorder {
@@ -158,6 +208,72 @@ pub mod fake {
             self.sent
                 .borrow_mut()
                 .push((self.id.clone(), message.clone()));
+            if let Some(native) = &mut self.native {
+                native.send(message);
+            }
+        }
+    }
+
+    // Runs each built-in's real TSX and SDK against fake native services.
+    // A round trip completes before returning to GPUI's deterministic executor.
+    struct NativePlugin {
+        child: std::process::Child,
+        input: std::process::ChildStdin,
+        output: std::io::BufReader<std::process::ChildStdout>,
+        incoming: UnboundedSender<PluginMessage>,
+    }
+
+    impl NativePlugin {
+        fn start(manifest: &Manifest, incoming: UnboundedSender<PluginMessage>) -> Self {
+            use std::process::{Command, Stdio};
+            static BUN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+            let bun = BUN.get_or_init(|| {
+                crate::plugin::find_bun().expect("Bun is required for the plugin UI tests")
+            });
+            let mut child = Command::new(bun)
+                .arg(crate::plugin::sdk_dir().join("test/native-host.ts"))
+                .arg(manifest.dir.join(&manifest.main))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut plugin = Self {
+                input: child.stdin.take().unwrap(),
+                output: std::io::BufReader::new(child.stdout.take().unwrap()),
+                child,
+                incoming,
+            };
+            plugin.receive();
+            plugin
+        }
+
+        fn receive(&mut self) {
+            use std::io::BufRead as _;
+            let mut line = String::new();
+            self.output.read_line(&mut line).unwrap();
+            let messages: Vec<PluginMessage> = serde_json::from_str(&line)
+                .unwrap_or_else(|err| panic!("TSX test host stopped: {err}: {line}"));
+            for message in messages {
+                assert!(
+                    !matches!(message, PluginMessage::Error { .. }),
+                    "{message:?}"
+                );
+                self.incoming.unbounded_send(message).unwrap();
+            }
+        }
+
+        fn send(&mut self, message: &HostMessage) {
+            use std::io::Write as _;
+            writeln!(self.input, "{}", serde_json::to_string(message).unwrap()).unwrap();
+            self.input.flush().unwrap();
+            self.receive();
+        }
+    }
+
+    impl Drop for NativePlugin {
+        fn drop(&mut self) {
+            self.child.kill().ok();
+            self.child.wait().ok();
         }
     }
 
@@ -218,6 +334,13 @@ pub mod fake {
                     key: "reset".into(),
                     title: "Reset Counter".into(),
                 }],
+                windows: vec![crate::plugin::PluginWindow {
+                    key: "history".into(),
+                    title: "Counter History".into(),
+                    width: 400.0,
+                    height: 300.0,
+                }],
+                data: Vec::new(),
                 dir: PathBuf::from("/plugins/counter"),
                 main: PathBuf::from("index.tsx"),
             }];
@@ -320,6 +443,8 @@ pub mod fake {
                 .borrow_mut()
                 .push((manifest.id.clone(), settings.clone()));
             let (sender, incoming) = unbounded();
+            let native = crate::builtins::contains(&manifest.id)
+                .then(|| NativePlugin::start(manifest, sender.clone()));
             self.plugin_inbox
                 .borrow_mut()
                 .insert(manifest.id.clone(), sender);
@@ -327,6 +452,7 @@ pub mod fake {
                 link: Box::new(Recorder {
                     id: manifest.id.clone(),
                     sent: self.plugin_sent.clone(),
+                    native,
                 }),
                 incoming,
             })
@@ -341,6 +467,8 @@ pub mod fake {
                 settings: Vec::new(),
                 clickable: false,
                 actions: Vec::new(),
+                windows: Vec::new(),
+                data: Vec::new(),
                 dir: PathBuf::from(format!("/plugins/{}", name.to_lowercase())),
                 main: PathBuf::from("index.tsx"),
             };

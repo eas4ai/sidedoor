@@ -188,8 +188,22 @@ impl ClipboardWindow {
     /// Handles the window's own keys. Returns whether the key was used.
     fn handle_key(&mut self, key: &Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let modifiers = key.modifiers;
-        let other = modifiers.shift || modifiers.control || modifiers.alt;
-        match (key.key.as_str(), modifiers.platform, other) {
+        let other = modifiers.shift
+            || modifiers.alt
+            || if cfg!(windows) {
+                modifiers.platform
+            } else {
+                modifiers.control
+            };
+        match (
+            key.key.as_str(),
+            if cfg!(windows) {
+                modifiers.control
+            } else {
+                modifiers.platform
+            },
+            other,
+        ) {
             ("down", false, false) => self.move_selection(1, cx),
             ("up", false, false) => self.move_selection(-1, cx),
             ("enter", false, false) => self.copy_selected(cx),
@@ -633,7 +647,7 @@ fn preview(
                 )
                 .child(small_button(
                     "reveal-file",
-                    "Show in Finder",
+                    crate::platform::REVEAL_LABEL,
                     palette,
                     move |cx| {
                         dock.read(cx).reveal_path(&target);
@@ -798,7 +812,11 @@ fn footer(
                 .child(action(
                     "delete-entry",
                     "Delete",
-                    "⌘⌫",
+                    if cfg!(windows) {
+                        "Ctrl+Backspace"
+                    } else {
+                        "⌘⌫"
+                    },
                     ClipboardWindow::delete_selected,
                 )),
         )

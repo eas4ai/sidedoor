@@ -5,15 +5,16 @@
 import {
   Button,
   Card,
+  Chart,
   Icon,
   Segmented,
+  Text,
   createStore,
   definePlugin,
   sidedoor,
   useEffect,
   useInterval,
   useRef,
-  useSetting,
   useStorage,
 } from "@sidedoor/sdk";
 
@@ -43,6 +44,34 @@ const now = createStore(Date.now());
 
 const restart = (minutes: number) => save(fresh(minutes));
 
+/** Minutes of finished sessions, by day (`YYYY-MM-DD`). */
+type History = Record<string, number>;
+
+const dayKey = (date: Date) => date.toISOString().slice(0, 10);
+
+function logSession(minutes: number) {
+  const history = sidedoor.storage.get<History>("history") ?? {};
+  const today = dayKey(new Date());
+  sidedoor.storage.set("history", { ...history, [today]: (history[today] ?? 0) + minutes });
+}
+
+/** The last `count` days, oldest first, for the charts. */
+function days(history: History, count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const day = new Date(Date.now() - (count - 1 - index) * 86_400_000);
+    return {
+      label:
+        count <= 7
+          ? day.toLocaleDateString("en", { weekday: "short" })
+          : day.toLocaleDateString("en", { month: "short", day: "numeric" }),
+      value: history[dayKey(day)] ?? 0,
+    };
+  });
+}
+
+const hours = (minutes: number) =>
+  minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+
 function toggle() {
   const timer = saved();
   save(
@@ -69,6 +98,43 @@ export default definePlugin({
   onClick: toggle,
   actions: {
     reset: { title: "Reset Timer", run: () => restart(saved().minutes) },
+    history: { title: "Focus History…", run: () => sidedoor.openWindow("history") },
+  },
+
+  windows: {
+    history: {
+      title: "Focus History",
+      width: 520,
+      height: 400,
+      render() {
+        const [history] = useStorage<History>("history", {});
+        const month = days(history, 30);
+        const total = month.reduce((sum, day) => sum + day.value, 0);
+        const best = month.reduce((top, day) => (day.value > top.value ? day : top), month[0]);
+        return (
+          <>
+            <div flex gap={10}>
+              {[
+                ["Last 30 days", hours(total)],
+                ["Daily average", hours(Math.round(total / 30))],
+                ["Best day", best.value ? `${best.label}, ${hours(best.value)}` : "None yet"],
+              ].map(([title, value]) => (
+                <div key={title} flex_1 flex flex_col gap={2} p={10} rounded={10} bg="fill">
+                  <Text variant="caption" secondary>{title}</Text>
+                  <Text variant="headline">{value}</Text>
+                </div>
+              ))}
+            </div>
+            <Chart kind="area" h={200} color="orange" name="Minutes" y_axis grid data={month} />
+            <Button
+              variant="link"
+              label="Clear History"
+              on_click={() => sidedoor.storage.delete("history")}
+            />
+          </>
+        );
+      },
+    },
   },
 
   tile() {
@@ -86,14 +152,15 @@ export default definePlugin({
     );
   },
 
-  card() {
+  card({ settings }) {
     const [timer] = useStorage("timer", initial);
+    const [history] = useStorage<History>("history", {});
     now.use();
     const { minutes } = timer;
     const left = secondsLeft(timer);
     const running = timer.endsAt !== null;
     // A new default from Settings › Plugins applies while the timer is idle.
-    const length = Number(useSetting<string>("length") ?? 25);
+    const length = Number(settings.length);
     const lastLength = useRef(length);
     useEffect(() => {
       if (lastLength.current === length) return;
@@ -107,6 +174,7 @@ export default definePlugin({
         const current = saved();
         if (current.endsAt !== null && secondsLeft(current) === 0) {
           restart(current.minutes);
+          logSession(current.minutes);
           sidedoor.notify({
             title: "Time's up",
             body: `${current.minutes} minutes of focus done. Take a break.`,
@@ -144,6 +212,8 @@ export default definePlugin({
           />
           <Button icon="rotate-ccw" label="Reset" on_click={() => restart(minutes)} />
         </div>
+        <Chart kind="bar" h={64} mt={4} color="orange" name="Minutes" data={days(history, 7)} />
+        <Button variant="link" label="Show History" on_click={() => sidedoor.openWindow("history")} />
       </Card>
     );
   },

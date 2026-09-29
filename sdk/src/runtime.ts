@@ -7,7 +7,29 @@ import type { Child, Component, Element, Node } from "./types";
 
 interface Instance {
   hooks: unknown[];
+  /** What each hook slot holds, so a snapshot knows what to keep. */
+  kinds: HookKind[];
   cleanups: Map<number, () => void>;
+  /** Values from before a hot reload, taken as the hooks first run. */
+  restored?: SavedInstance;
+}
+
+type HookKind = "state" | "ref" | "other";
+
+interface SavedInstance {
+  kinds: HookKind[];
+  /** By hook index; objects rather than arrays, since JSON fills gaps with null. */
+  values: Record<number, unknown>;
+}
+
+/**
+ * State kept across a hot reload: `useState` and `useRef` values by
+ * component path, and `createStore` values by creation order. Only plain
+ * JSON values are kept.
+ */
+export interface Snapshot {
+  instances: Record<string, SavedInstance>;
+  stores: Record<number, unknown>;
 }
 
 interface EffectHook {
@@ -23,6 +45,9 @@ let pendingEffects: Array<() => void> = [];
 let handlers = new Map<string, (value: unknown) => void>();
 let onInvalidate: () => void = () => {};
 let scheduled = false;
+/** Every store, in creation order, for snapshots. */
+const stores: Array<{ get(): unknown; restore(value: unknown): void }> = [];
+let restoring: Snapshot | null = null;
 
 /** Called whenever state changes; the host bridge re-renders in response. */
 export function setInvalidateHandler(handler: () => void) {
@@ -52,8 +77,10 @@ export function useState<T>(
   const owner = instance();
   const index = cursor++;
   if (!(index in owner.hooks)) {
-    owner.hooks[index] =
-      typeof initial === "function" ? (initial as () => T)() : initial;
+    owner.kinds[index] = "state";
+    owner.hooks[index] = restoredValue(owner, index, "state", () =>
+      typeof initial === "function" ? (initial as () => T)() : initial,
+    );
   }
   const set = (next: T | ((previous: T) => T)) => {
     const previous = owner.hooks[index] as T;
@@ -70,7 +97,10 @@ export function useState<T>(
 export function useRef<T>(initial: T): { current: T } {
   const owner = instance();
   const index = cursor++;
-  if (!(index in owner.hooks)) owner.hooks[index] = { current: initial };
+  if (!(index in owner.hooks)) {
+    owner.kinds[index] = "ref";
+    owner.hooks[index] = { current: restoredValue(owner, index, "ref", () => initial) };
+  }
   return owner.hooks[index] as { current: T };
 }
 
@@ -87,6 +117,7 @@ export function useMemo<T>(compute: () => T, deps: unknown[]): T {
   const index = cursor++;
   const slot = owner.hooks[index] as { deps: unknown[]; value: T } | undefined;
   if (!slot || changed(slot.deps, deps)) {
+    owner.kinds[index] = "other";
     owner.hooks[index] = { deps, value: compute() };
   }
   return (owner.hooks[index] as { value: T }).value;
@@ -98,6 +129,7 @@ export function useEffect(effect: () => void | (() => void), deps?: unknown[]) {
   const index = cursor++;
   const slot = owner.hooks[index] as EffectHook | undefined;
   if (slot && deps && !changed(slot.deps, deps)) return;
+  owner.kinds[index] = "other";
   owner.hooks[index] = { deps };
   pendingEffects.push(() => {
     owner.cleanups.get(index)?.();
@@ -123,7 +155,15 @@ export function useInterval(tick: () => void, ms: number | null) {
  * at module level so it outlives any one surface.
  */
 export function createStore<T>(initial: T) {
-  let value = initial;
+  const index = stores.length;
+  const saved = restoring?.stores[index];
+  let value = saved !== undefined ? (saved as T) : initial;
+  stores.push({
+    get: () => value,
+    restore: (next) => {
+      value = next as T;
+    },
+  });
   return {
     get: () => value,
     set(next: T | ((previous: T) => T)) {
@@ -182,7 +222,7 @@ function renderChild(child: Child, path: string): Node[] {
     seen.add(here);
     let owner = instances.get(here);
     if (!owner) {
-      owner = { hooks: [], cleanups: new Map() };
+      owner = { hooks: [], kinds: [], cleanups: new Map(), restored: restoring?.instances[here] };
       instances.set(here, owner);
     }
     const [outer, outerCursor] = [current, cursor];
@@ -213,15 +253,20 @@ function renderChild(child: Child, path: string): Node[] {
 
 /**
  * Renders each surface to nodes, unmounting components that disappeared.
- * Effects run afterwards, through `runEffects`.
+ * Each surface gets `props`. Effects run afterwards, through `runEffects`.
  */
-export function renderSurfaces(surfaces: Record<string, Component>): Record<string, Node[]> {
+export function renderSurfaces(
+  surfaces: Record<string, Component<any>>,
+  props: Record<string, unknown> = {},
+): Record<string, Node[]> {
   seen = new Set();
   handlers = new Map();
   const output: Record<string, Node[]> = {};
   for (const [name, surface] of Object.entries(surfaces)) {
-    output[name] = renderChild({ type: surface, props: {} }, name);
+    output[name] = renderChild({ type: surface, props }, name);
   }
+  for (const owner of instances.values()) owner.restored = undefined;
+  restoring = null;
   for (const [path, owner] of instances) {
     if (!seen.has(path)) {
       for (const cleanup of owner.cleanups.values()) cleanup();
@@ -253,6 +298,57 @@ export function reset() {
   instances.clear();
   handlers = new Map();
   pendingEffects = [];
+  stores.length = 0;
+  restoring = null;
+}
+
+/** Whether `value` survives JSON unchanged: no functions, dates or classes. */
+function isPlain(value: unknown): boolean {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
+    return typeof value !== "number" || Number.isFinite(value);
+  }
+  if (Array.isArray(value)) return value.every(isPlain);
+  if (typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return (
+    (prototype === Object.prototype || prototype === null) &&
+    Object.values(value as object).every(isPlain)
+  );
+}
+
+function restoredValue<T>(owner: Instance, index: number, kind: HookKind, fresh: () => T): T {
+  const saved = owner.restored;
+  if (saved && saved.kinds[index] === kind && index in saved.values) {
+    return saved.values[index] as T;
+  }
+  return fresh();
+}
+
+/** The state worth keeping when the plugin reloads. */
+export function snapshot(): Snapshot {
+  const saved: Snapshot = { instances: {}, stores: {} };
+  for (const [path, owner] of instances) {
+    const values: Record<number, unknown> = {};
+    owner.kinds.forEach((kind, index) => {
+      const hook = owner.hooks[index];
+      const value = kind === "ref" ? (hook as { current: unknown }).current : hook;
+      if (kind !== "other" && isPlain(value)) values[index] = value;
+    });
+    if (Object.keys(values).length > 0) saved.instances[path] = { kinds: owner.kinds, values };
+  }
+  stores.forEach((store, index) => {
+    const value = store.get();
+    if (isPlain(value)) saved.stores[index] = value;
+  });
+  return saved;
+}
+
+/**
+ * Hands state from before a reload to the stores created next and the
+ * components in the first render.
+ */
+export function restore(saved: Snapshot | null) {
+  restoring = saved;
 }
 
 /** A change to a rendered surface; `path` indexes into children from the root. */

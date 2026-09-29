@@ -10,13 +10,12 @@ pub mod text {
     pub const CALLOUT: f32 = 12.0;
     pub const SUBHEADLINE: f32 = 11.0;
     pub const CAPTION: f32 = 10.0;
-    pub const MICRO: f32 = 8.0;
     pub const DISPLAY: f32 = 28.0;
 }
 
 fn is_dark(window: &Window) -> bool {
     matches!(
-        window.appearance(),
+        crate::native::appearance(window),
         WindowAppearance::Dark | WindowAppearance::VibrantDark
     )
 }
@@ -27,7 +26,7 @@ fn is_dark(window: &Window) -> bool {
 pub fn sync_kit_theme(window: &mut Window, cx: &mut App) {
     let dark = is_dark(window);
     if !cx.has_global::<Theme>() || Theme::global(cx).is_dark() != dark {
-        Theme::change(window.appearance(), Some(window), cx);
+        Theme::change(crate::native::appearance(window), Some(window), cx);
     }
     let caret = if dark {
         Palette::dark()
@@ -96,7 +95,7 @@ impl Palette {
             palette.stroke = palette.label.opacity(0.55);
             palette.separator = palette.label.opacity(0.35);
         }
-        if accessibility.reduce_transparency {
+        if accessibility.reduce_transparency || !crate::native::has_material() {
             palette.group = if dark {
                 color(0x2a2a2aff)
             } else {

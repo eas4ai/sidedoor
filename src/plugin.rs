@@ -34,6 +34,10 @@ pub struct Manifest {
     pub clickable: bool,
     /// Commands for the item's context menu.
     pub actions: Vec<PluginAction>,
+    /// Windows the plugin can open, by key.
+    pub windows: Vec<PluginWindow>,
+    /// Native live data explicitly requested by this plugin.
+    pub data: Vec<DataSource>,
     pub dir: PathBuf,
     /// The entry file, relative to `dir`.
     pub main: PathBuf,
@@ -93,6 +97,24 @@ pub struct PluginAction {
     pub title: String,
 }
 
+/// A window a plugin declares, opened with `sidedoor.openWindow(key)`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct PluginWindow {
+    pub key: String,
+    pub title: String,
+    #[serde(default = "default_window_width")]
+    pub width: f64,
+    #[serde(default = "default_window_height")]
+    pub height: f64,
+}
+
+fn default_window_width() -> f64 {
+    480.0
+}
+fn default_window_height() -> f64 {
+    360.0
+}
+
 /// What a plugin tells the host about itself when it starts, from its
 /// `definePlugin` call.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -110,6 +132,10 @@ pub struct Described {
     pub clickable: bool,
     #[serde(default)]
     pub actions: Vec<PluginAction>,
+    #[serde(default)]
+    pub windows: Vec<PluginWindow>,
+    #[serde(default)]
+    pub data: Vec<DataSource>,
 }
 
 fn default_icon() -> String {
@@ -148,6 +174,8 @@ impl Manifest {
             settings: Vec::new(),
             clickable: false,
             actions: Vec::new(),
+            windows: Vec::new(),
+            data: Vec::new(),
             dir: dir.to_path_buf(),
             main,
         })
@@ -161,9 +189,19 @@ impl Manifest {
         self.height = described
             .height
             .map(|height| height.clamp(40.0, MAX_HEIGHT));
+        self.data = described.data;
         self.settings = described.settings;
         self.clickable = described.clickable;
         self.actions = described.actions;
+        self.windows = described
+            .windows
+            .into_iter()
+            .map(|window| PluginWindow {
+                width: window.width.clamp(280.0, 1200.0),
+                height: window.height.clamp(200.0, 900.0),
+                ..window
+            })
+            .collect();
     }
 
     /// The asset path of the plugin's icon.
@@ -235,12 +273,29 @@ pub fn discover(dir: &Path) -> Vec<Manifest> {
         .filter(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            !name.starts_with('.') && name != "node_modules"
+            !name.starts_with('.') && name != "node_modules" && !name.starts_with("builtin.")
         })
         .filter_map(|entry| Manifest::read(&entry.path()))
         .collect();
     found.sort_by(|a, b| a.name.cmp(&b.name));
     found
+}
+
+/// Opt-in native feeds shared by built-in and user plugins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataSource {
+    Weather,
+    Stats,
+    Clipboard,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ClipboardCommand {
+    ShowHistory,
+    CopyEntry { id: u64 },
+    RequestClear,
 }
 
 // MARK: Protocol
@@ -309,6 +364,10 @@ pub fn apply_patches(tree: &mut [Node], patches: Vec<Patch>) -> bool {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginMessage {
+    Clipboard {
+        #[serde(flatten)]
+        command: ClipboardCommand,
+    },
     /// Sent first: what `definePlugin` declares.
     Manifest(Described),
     Render {
@@ -333,6 +392,12 @@ pub enum PluginMessage {
         #[serde(default)]
         body: String,
     },
+    OpenWindow {
+        key: String,
+    },
+    CloseWindow {
+        key: String,
+    },
     /// A `console.log` line.
     Log {
         line: String,
@@ -348,6 +413,10 @@ pub enum PluginMessage {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostMessage {
+    Data {
+        source: DataSource,
+        value: Value,
+    },
     Event {
         handler: String,
         value: Value,
@@ -361,6 +430,11 @@ pub enum HostMessage {
     /// A command from the item's context menu.
     Action {
         key: String,
+    },
+    /// One of the plugin's windows opened or closed.
+    Window {
+        key: String,
+        open: bool,
     },
     Settings {
         values: Map<String, Value>,
@@ -393,7 +467,14 @@ struct Supervisor {
 
 impl Supervisor {
     fn spawn(bun: &Path, sdk: &Path) -> io::Result<Self> {
-        let mut child = Command::new(bun)
+        let mut command = Command::new(bun);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            // The GUI host owns these pipes; no console should flash at launch.
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command
             .arg(sdk.join("src/supervisor.ts"))
             // Plugins compile JSX with the SDK's tsconfig, found from here.
             .current_dir(sdk)
@@ -502,7 +583,9 @@ impl Runner {
         bun: &Path,
         sdk: &Path,
     ) -> io::Result<Connection> {
-        prepare(&manifest.dir, sdk)?;
+        if !crate::builtins::contains(&manifest.id) {
+            prepare(&manifest.dir, sdk)?;
+        }
         let data = crate::platform::support_dir()
             .join("plugin-data")
             .join(&manifest.id);
@@ -606,9 +689,11 @@ pub fn fingerprint(dir: &Path) -> u64 {
 fn prepare(dir: &Path, sdk: &Path) -> io::Result<()> {
     let scope = dir.join("node_modules").join("@sidedoor");
     let link = scope.join("sdk");
+    #[cfg(unix)]
     match fs::symlink_metadata(&link) {
-        // A link from before the app moved, or to another copy of it.
-        Ok(metadata) if metadata.is_symlink() && fs::read_link(&link)? != sdk => {
+        // A link into an app that moved or was deleted. A link to another
+        // working SDK, such as a checkout of this repo, is left alone.
+        Ok(metadata) if metadata.is_symlink() && !link.join("package.json").exists() => {
             fs::remove_file(&link)?;
             std::os::unix::fs::symlink(sdk, &link)?;
         }
@@ -619,10 +704,42 @@ fn prepare(dir: &Path, sdk: &Path) -> io::Result<()> {
             std::os::unix::fs::symlink(sdk, &link)?;
         }
     }
+    #[cfg(target_os = "windows")]
+    install_sdk_copy(sdk, &link)?;
     let tsconfig = dir.join("tsconfig.json");
     if !tsconfig.exists() {
         fs::write(&tsconfig, TSCONFIG)?;
     }
+    Ok(())
+}
+
+// Windows directory symlinks normally require Developer Mode or administrator
+// privileges. Keep a host-owned SDK copy instead, refreshing it on every load.
+// A package installed by the plugin author is never overwritten.
+#[cfg(any(target_os = "windows", test))]
+fn install_sdk_copy(sdk: &Path, destination: &Path) -> io::Result<()> {
+    const MARKER: &str = ".sidedoor-sdk";
+    if destination.exists() && !destination.join(MARKER).is_file() {
+        return Ok(());
+    }
+    fn copy(source: &Path, destination: &Path) -> io::Result<()> {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let target = destination.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy(&entry.path(), &target)?;
+            } else if entry.file_type()?.is_file() {
+                fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
+    }
+    fs::create_dir_all(destination)?;
+    // Mark ownership before copying so an interrupted install can be repaired.
+    fs::write(destination.join(MARKER), b"Managed by Sidedoor\n")?;
+    copy(&sdk.join("src"), &destination.join("src"))?;
+    fs::copy(sdk.join("package.json"), destination.join("package.json"))?;
     Ok(())
 }
 
@@ -678,7 +795,7 @@ pub fn create(dir: &Path, name: &str) -> io::Result<Manifest> {
     Manifest::read(&folder).ok_or_else(|| io::Error::other("the new plugin can't be read"))
 }
 
-const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useSetting, useState } from "@sidedoor/sdk";
+const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useState } from "@sidedoor/sdk";
 
 // Save this file and the card reloads. The @sidedoor/sdk README lists
 // every element, component and style prop.
@@ -689,12 +806,11 @@ export default definePlugin({
     greeting: { title: "Greeting", type: "text", default: "Hello" },
   },
 
-  card() {
+  card({ settings }) {
     const [count, setCount] = useState(0);
-    const greeting = useSetting<string>("greeting");
     return (
       <Card title={TITLE} accessory={`${count} clicks`}>
-        <Text secondary>{`${greeting}! Edit index.tsx to make this yours.`}</Text>
+        <Text secondary>{`${settings.greeting}! Edit index.tsx to make this yours.`}</Text>
         <div flex gap={8}>
           <Button variant="primary" label="Click me" on_click={() => setCount(count + 1)} />
           <Button label="Reset" on_click={() => setCount(0)} />
@@ -708,13 +824,8 @@ export default definePlugin({
 /// The SDK shipped inside the app bundle, or the repository's when run
 /// with `cargo run`.
 pub fn sdk_dir() -> PathBuf {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.parent()?.join("Resources/sdk")));
-    match bundled {
-        Some(path) if path.exists() => path,
-        _ => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk"),
-    }
+    crate::platform::bundled_resource("sdk")
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk"))
 }
 
 /// Finds Bun. Apps opened from Finder don't get the shell's `PATH`, so ask
@@ -723,6 +834,19 @@ pub fn find_bun() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("SIDEDOOR_BUN") {
         return Some(PathBuf::from(path));
     }
+    if let Some(bundled) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            Some(
+                exe.parent()?
+                    .join(if cfg!(windows) { "bun.exe" } else { "bun" }),
+            )
+        })
+        .filter(|path| path.is_file())
+    {
+        return Some(bundled);
+    }
+    #[cfg(not(target_os = "windows"))]
     let from_shell = Command::new("/bin/zsh")
         .args(["-lc", "command -v bun"])
         .stderr(Stdio::null())
@@ -733,12 +857,23 @@ pub fn find_bun() -> Option<PathBuf> {
             let path = PathBuf::from(path.trim());
             path.is_file().then_some(path)
         });
+    #[cfg(not(target_os = "windows"))]
     if from_shell.is_some() {
         return from_shell;
     }
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let name = if cfg!(windows) { "bun.exe" } else { "bun" };
+    if let Some(path) = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(name))
+            .find(|path| path.is_file())
+    }) {
+        return Some(path);
+    }
+    let home = PathBuf::from(
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default(),
+    );
     [
-        home.join(".bun/bin/bun"),
+        home.join(".bun/bin").join(name),
         PathBuf::from("/opt/homebrew/bin/bun"),
         PathBuf::from("/usr/local/bin/bun"),
     ]
@@ -749,6 +884,37 @@ pub fn find_bun() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sdk_copy_repairs_partial_installs_updates_owned_files_and_preserves_user_packages() {
+        let dir = std::env::temp_dir().join(format!("sidedoor-sdk-copy-{}", std::process::id()));
+        let source = dir.join("source");
+        let destination = dir.join("plugin/node_modules/@sidedoor/sdk");
+        fs::create_dir_all(source.join("src")).unwrap();
+        fs::write(source.join("package.json"), r#"{"name":"@sidedoor/sdk"}"#).unwrap();
+        fs::write(source.join("src/index.ts"), "export const version = 1;").unwrap();
+        install_sdk_copy(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("src/index.ts")).unwrap(),
+            "export const version = 1;"
+        );
+        fs::write(source.join("src/index.ts"), "export const version = 2;").unwrap();
+        fs::remove_file(destination.join("package.json")).unwrap();
+        install_sdk_copy(&source, &destination).unwrap();
+        assert!(destination.join("package.json").is_file());
+        assert_eq!(
+            fs::read_to_string(destination.join("src/index.ts")).unwrap(),
+            "export const version = 2;"
+        );
+        fs::remove_file(destination.join(".sidedoor-sdk")).unwrap();
+        fs::write(destination.join("src/index.ts"), "user-installed SDK").unwrap();
+        install_sdk_copy(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("src/index.ts")).unwrap(),
+            "user-installed SDK"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     fn element(kind: &str, children: Vec<Node>) -> Node {
         Node::Element {
@@ -887,6 +1053,7 @@ mod tests {
         let json = r#"{"type":"manifest","plugin":"pomodoro","name":"Pomodoro","icon":"timer",
             "width":9000,"height":null,"clickable":true,
             "actions":[{"key":"skip","title":"Skip Break"}],
+            "windows":[{"key":"history","title":"History","width":50}],
             "settings":[{"key":"sound","title":"Sound","type":"toggle"},
                         {"key":"mode","title":"Mode","type":"choice","options":["focus","break"]}]}"#;
         let PluginMessage::Manifest(described) = serde_json::from_str(json).unwrap() else {
@@ -901,6 +1068,8 @@ mod tests {
             settings: Vec::new(),
             clickable: false,
             actions: Vec::new(),
+            windows: Vec::new(),
+            data: Vec::new(),
             dir: PathBuf::from("/plugins/pomodoro"),
             main: PathBuf::from("index.tsx"),
         };
@@ -910,6 +1079,10 @@ mod tests {
         assert_eq!(manifest.height, None);
         assert!(manifest.clickable);
         assert_eq!(manifest.actions[0].title, "Skip Break");
+        assert_eq!(
+            (manifest.windows[0].width, manifest.windows[0].height),
+            (280.0, 360.0)
+        );
 
         let saved = Map::from_iter([("mode".to_string(), Value::from("break"))]);
         let values = manifest.settings_with(Some(&saved));

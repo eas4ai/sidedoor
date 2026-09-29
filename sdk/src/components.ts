@@ -13,9 +13,11 @@ import type {
   KeycapProps,
   ListRowProps,
   MeterProps,
+  NumberTextProps,
   SegmentedProps,
   SpacerProps,
   SparklineProps,
+  ChartProps,
   SwitchProps,
   TextProps,
 } from "./types";
@@ -44,11 +46,14 @@ export const Switch = native<SwitchProps>("Switch");
 /** A segmented control, as in the Clipboard History filters. */
 export const Segmented = native<SegmentedProps>("Segmented");
 /** A labelled gauge, as in the Stats card. */
+export const NumberText = native<NumberTextProps>("NumberText");
 export const Meter = native<MeterProps>("Meter");
 /** A list row with an icon, title and subtitle, as in the Clipboard card. */
 export const ListRow = native<ListRowProps>("ListRow");
 /** Bars of recent values, as in the Stats card. */
 export const Sparkline = native<SparklineProps>("Sparkline");
+/** A line, area or bar chart, 96 points tall unless `h` says otherwise. */
+export const Chart = native<ChartProps>("Chart");
 /** A card footer: a hairline above a row of small text or buttons. */
 export const Footer = native<FooterProps>("Footer");
 /** A key drawn as a keycap. */

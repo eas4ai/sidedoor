@@ -1,27 +1,42 @@
 //! Sidedoor: a second dock that hides at a screen edge, with app
 //! launchers and live Weather, Clipboard and Stats widgets.
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
+mod builtins;
 mod clipboard;
 mod clipboard_window;
 mod config;
 mod dock;
 mod geometry;
+#[cfg_attr(target_os = "windows", path = "windows/hotkeys.rs")]
 mod hotkeys;
+#[cfg(target_os = "macos")]
 mod macos;
 mod motion;
+#[cfg_attr(target_os = "windows", path = "windows/native.rs")]
+mod native;
+#[cfg(target_os = "macos")]
 mod notifications;
 mod platform;
 mod plugin;
+mod plugin_data;
 mod plugin_ui;
+mod plugin_window;
+mod remote_image;
 mod settings_plugins;
 mod settings_window;
 mod shortcut;
 mod shortcut_recorder;
 mod stats;
+#[cfg_attr(target_os = "windows", path = "windows/status_menu.rs")]
 mod status_menu;
 mod style;
 mod views;
 mod weather;
+
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(test)]
 mod ui_tests;
@@ -37,12 +52,11 @@ use gpui_kit::{
     WindowBounds, WindowKind, WindowOptions, base::Root, font, point, px, size, transparent_black,
 };
 use hotkeys::{HotKeys, RegisterError};
-use objc2::rc::Retained;
-use objc2_app_kit::{NSView, NSWindow};
+use native::{ForegroundApp, NativeMaterial, NativeWindow};
 use platform::Platform;
 use settings_window::{SettingsEvent, SettingsWindow};
 use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use views::{
     AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem, OpenSettings,
     RemoveItem, RemoveShortcut, RevealItem, RunPluginAction,
@@ -67,9 +81,9 @@ fn panel_options(width: f64, height: f64) -> WindowOptions {
 }
 
 struct Panel {
-    window: Retained<NSWindow>,
+    window: NativeWindow,
     handle: AnyWindowHandle,
-    material: Option<Retained<NSView>>,
+    material: Option<NativeMaterial>,
 }
 
 impl Panel {
@@ -86,7 +100,7 @@ impl Panel {
 
     fn set_material_hidden(&self, hidden: bool) {
         if let Some(material) = &self.material {
-            material.setHidden(hidden);
+            native::set_material_hidden(material, hidden);
         }
     }
 }
@@ -172,10 +186,10 @@ impl Panels {
                 .resize_then(frame.width, frame.height, cx, move || {
                     if moved && shown {
                         // Tuck it into the new edge, then slide it out there.
-                        macos::slide_dock(&window, hidden_frame, false, false);
-                        macos::slide_dock(&window, frame, true, animate);
+                        native::slide_dock(&window, hidden_frame, false, false);
+                        native::slide_dock(&window, frame, true, animate);
                     } else {
-                        macos::slide_dock(&window, target, shown && !first, false);
+                        native::slide_dock(&window, target, shown && !first, false);
                     }
                 });
             if moved {
@@ -184,7 +198,7 @@ impl Panels {
         }
         if shown != self.shown {
             self.shown = shown;
-            macos::slide_dock(
+            native::slide_dock(
                 &self.dock.window,
                 target,
                 shown,
@@ -206,11 +220,11 @@ impl Panels {
                 });
                 let frame = placement.frame;
                 let entry = match previous {
-                    _ if !motion => macos::CardEntry::Snap,
-                    Some(previous) => macos::CardEntry::Glide {
+                    _ if !motion => native::CardEntry::Snap,
+                    Some(previous) => native::CardEntry::Glide {
                         from: geometry::glide_start(previous.frame, frame, placement.side),
                     },
-                    None => macos::CardEntry::Pop {
+                    None => native::CardEntry::Pop {
                         anchor: placement.arrow_tip(),
                     },
                 };
@@ -219,28 +233,26 @@ impl Panels {
                 self.card
                     .resize_then(frame.width, frame.height, cx, move || {
                         if let Some(material) = &material {
-                            macos::shape_card(material, &placement);
+                            native::shape_card(material, &placement);
                         }
-                        macos::show_card(&window, frame, entry);
+                        native::show_card(&window, frame, entry);
                     });
             }
             None => {
                 let anchor = previous
                     .filter(|_| motion)
                     .map(|previous| previous.arrow_tip());
-                macos::hide_card(&self.card.window, anchor);
+                native::hide_card(&self.card.window, anchor);
                 // A card that took the keyboard, for a plugin's text field,
                 // hands it back once it has faded, so typing returns to the
                 // app underneath.
-                if self.card.window.isKeyWindow() {
+                if native::is_key_window(&self.card.window) {
                     let window = self.card.window.clone();
                     cx.spawn(async move |cx| {
                         cx.background_executor()
                             .timer(motion::CARD_OUT.duration + std::time::Duration::from_millis(30))
                             .await;
-                        if window.alphaValue() < 0.01 {
-                            window.orderOut(None);
-                        }
+                        native::dismiss_if_invisible(&window);
                     })
                     .detach();
                 }
@@ -265,7 +277,11 @@ fn measure(panel: &Panel, label: &str, cx: &mut App) -> f64 {
                 len: label.len(),
                 font: gpui_kit::Font {
                     weight: FontWeight::NORMAL,
-                    ..font(".SystemUIFont")
+                    ..font(if cfg!(windows) {
+                        "Segoe UI"
+                    } else {
+                        ".SystemUIFont"
+                    })
                 },
                 color: gpui_kit::black(),
                 background_color: None,
@@ -286,7 +302,7 @@ fn open_panel<V: gpui_kit::Render>(
     width: f64,
     height: f64,
     corner_radius: f64,
-    backdrop: macos::Backdrop,
+    backdrop: native::Backdrop,
     build: impl FnOnce(&mut gpui_kit::Window, &mut App) -> Entity<V>,
 ) -> Result<Panel, String> {
     let (handle, _) = gpui_kit::open_window(panel_options(width, height), cx, build)
@@ -299,12 +315,12 @@ fn open_panel<V: gpui_kit::Render>(
                 root.style()
                     .refine(&StyleRefinement::default().bg(transparent_black()));
             });
-            macos::ns_window(window)
+            native::window_handle(window)
         })
         .ok()
         .flatten()
         .ok_or("couldn't reach the native window")?;
-    let material = macos::configure_panel(&window, corner_radius, backdrop);
+    let material = native::configure_panel(&window, corner_radius, backdrop);
     Ok(Panel {
         window,
         handle,
@@ -317,7 +333,7 @@ fn open_panel<V: gpui_kit::Render>(
 #[derive(Default)]
 struct HistoryWindow {
     handle: Option<AnyWindowHandle>,
-    previous_app: Option<i32>,
+    previous_app: Option<ForegroundApp>,
 }
 
 fn open_clipboard_history(
@@ -336,7 +352,7 @@ fn open_clipboard_history(
         return Ok(());
     }
 
-    state.borrow_mut().previous_app = macos::frontmost_app();
+    state.borrow_mut().previous_app = native::frontmost_app();
     cx.activate(true);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -346,7 +362,7 @@ fn open_clipboard_history(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("Clipboard History".into()),
-            appears_transparent: true,
+            appears_transparent: cfg!(target_os = "macos"),
             traffic_light_position: Some(point(
                 px(18.0),
                 px(clipboard_window::TOOLBAR_HEIGHT / 2.0 - 7.0),
@@ -366,12 +382,15 @@ fn open_clipboard_history(
                 root.style()
                     .refine(&StyleRefinement::default().bg(transparent_black()));
             });
-            if let Some(native) = macos::ns_window(window) {
-                macos::add_window_material(&native);
+            if let Some(native) = native::window_handle(window) {
+                native::add_window_material(&native);
                 if !cx.reduce_motion() {
-                    macos::fade_in(&native);
+                    native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
@@ -390,7 +409,7 @@ fn open_clipboard_history(
             // Hand the keyboard back to the app the user came from, ready
             // to paste.
             if let Some(pid) = previous {
-                macos::activate_app(pid);
+                native::activate_app(pid);
             }
         }
     })
@@ -399,11 +418,126 @@ fn open_clipboard_history(
     Ok(())
 }
 
+/// Plugin windows on screen, by plugin id and window key, with the app
+/// that had focus before each opened.
+type PluginWindows =
+    Rc<RefCell<HashMap<(String, String), (AnyWindowHandle, Option<ForegroundApp>)>>>;
+
+/// Removes a plugin window; the keyboard goes back to the app before it.
+fn close_plugin_window(windows: &PluginWindows, id: &(String, String), cx: &mut App) {
+    let Some((handle, previous)) = windows.borrow_mut().remove(id) else {
+        return;
+    };
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .ok();
+    if let Some(pid) = previous {
+        native::activate_app(pid);
+    }
+}
+
+fn open_plugin_window(
+    dock: &Entity<Dock>,
+    windows: &PluginWindows,
+    plugin: &str,
+    key: &str,
+    cx: &mut App,
+) -> Result<(), String> {
+    let id = (plugin.to_string(), key.to_string());
+    let existing = windows.borrow().get(&id).map(|(handle, _)| *handle);
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        cx.activate(true);
+        return Ok(());
+    }
+    let declared = dock
+        .read(cx)
+        .items
+        .iter()
+        .find_map(|item| match &item.kind {
+            dock::ItemKind::Plugin(manifest) if manifest.id == plugin => manifest
+                .windows
+                .iter()
+                .find(|window| window.key == key)
+                .cloned(),
+            _ => None,
+        });
+    let declared = declared.ok_or("the plugin declares no such window")?;
+
+    let previous = native::frontmost_app();
+    cx.activate(true);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(declared.width as f32), px(declared.height as f32)),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some(declared.title.clone().into()),
+            appears_transparent: cfg!(target_os = "macos"),
+            traffic_light_position: Some(point(px(14.0), px(plugin_window::TITLE_BAR / 2.0 - 7.0))),
+        }),
+        window_min_size: Some(size(px(280.0), px(200.0))),
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| {
+            plugin_window::PluginWindow::new(
+                dock.clone(),
+                plugin.to_string().into(),
+                key.to_string().into(),
+                declared.title.clone().into(),
+                window,
+                cx,
+            )
+        })
+    })
+    .map_err(|err| err.to_string())?;
+    handle
+        .update(cx, |_, window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                root.style()
+                    .refine(&StyleRefinement::default().bg(transparent_black()));
+            });
+            if let Some(native) = native::window_handle(window) {
+                native::add_window_material(&native);
+                if !cx.reduce_motion() {
+                    native::fade_in(&native);
+                }
+            }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
+        })
+        .ok();
+
+    let (dock, closing, id_for_close) = (dock.clone(), windows.clone(), id.clone());
+    cx.subscribe(&view, move |_, _: &plugin_window::PluginWindowEvent, cx| {
+        // The close button already closes the window.
+        let previous = closing
+            .borrow_mut()
+            .remove(&id_for_close)
+            .and_then(|(_, previous)| previous);
+        let (plugin, key) = &id_for_close;
+        dock.update(cx, |dock, _| dock.plugin_window_closed(plugin, key));
+        if let Some(pid) = previous {
+            native::activate_app(pid);
+        }
+    })
+    .detach();
+    windows.borrow_mut().insert(id, (handle, previous));
+    Ok(())
+}
+
 /// The Settings window, while it is open, and the app that had focus.
 #[derive(Default)]
 struct SettingsState {
     handle: Option<AnyWindowHandle>,
-    previous_app: Option<i32>,
+    previous_app: Option<ForegroundApp>,
 }
 
 fn open_settings(
@@ -421,7 +555,7 @@ fn open_settings(
         return Ok(());
     }
 
-    state.borrow_mut().previous_app = macos::frontmost_app();
+    state.borrow_mut().previous_app = native::frontmost_app();
     cx.activate(true);
     let (width, height) = settings_window::WINDOW_SIZE;
     let options = WindowOptions {
@@ -432,7 +566,7 @@ fn open_settings(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some(settings_window::Tab::General.title().into()),
-            appears_transparent: true,
+            appears_transparent: cfg!(target_os = "macos"),
             traffic_light_position: None,
         }),
         is_resizable: false,
@@ -450,12 +584,15 @@ fn open_settings(
                 root.style()
                     .refine(&StyleRefinement::default().bg(transparent_black()));
             });
-            if let Some(native) = macos::ns_window(window) {
-                macos::add_window_material(&native);
+            if let Some(native) = native::window_handle(window) {
+                native::add_window_material(&native);
                 if !cx.reduce_motion() {
-                    macos::fade_in(&native);
+                    native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
@@ -474,7 +611,7 @@ fn open_settings(
                 .ok();
         }
         if let Some(pid) = previous {
-            macos::activate_app(pid);
+            native::activate_app(pid);
         }
     })
     .detach();
@@ -484,10 +621,7 @@ fn open_settings(
 
 /// Opens the settings file in the user's default text editor.
 fn open_config_file() {
-    let opened = std::process::Command::new("/usr/bin/open")
-        .arg("-t")
-        .arg(Config::path())
-        .spawn();
+    let opened = native::open_config(&Config::path());
     if let Err(err) = opened {
         eprintln!("sidedoor: couldn't open the settings file: {err}");
     }
@@ -522,7 +656,7 @@ fn register_shortcuts(dock: &Entity<Dock>, shortcuts: &SharedShortcuts, cx: &mut
 #[derive(Default)]
 struct RecorderWindow {
     handle: Option<AnyWindowHandle>,
-    previous_app: Option<i32>,
+    previous_app: Option<ForegroundApp>,
 }
 
 fn open_shortcut_recorder(
@@ -542,7 +676,7 @@ fn open_shortcut_recorder(
     if let Some(shortcuts) = shortcuts.borrow_mut().as_mut() {
         shortcuts.hotkeys.suspend();
     }
-    state.borrow_mut().previous_app = macos::frontmost_app();
+    state.borrow_mut().previous_app = native::frontmost_app();
     cx.activate(true);
 
     let (title, icon, glyph, current) = {
@@ -591,7 +725,7 @@ fn open_shortcut_recorder(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("Assign Shortcut".into()),
-            appears_transparent: true,
+            appears_transparent: cfg!(target_os = "macos"),
             traffic_light_position: Some(point(px(14.0), px(14.0))),
         }),
         is_resizable: false,
@@ -609,12 +743,15 @@ fn open_shortcut_recorder(
                 root.style()
                     .refine(&StyleRefinement::default().bg(transparent_black()));
             });
-            if let Some(native) = macos::ns_window(window) {
-                macos::add_window_material(&native);
+            if let Some(native) = native::window_handle(window) {
+                native::add_window_material(&native);
                 if !cx.reduce_motion() {
-                    macos::fade_in(&native);
+                    native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
@@ -654,7 +791,7 @@ fn open_shortcut_recorder(
             }
         }
         if let Some(pid) = previous {
-            macos::activate_app(pid);
+            native::activate_app(pid);
         }
     })
     .detach();
@@ -664,14 +801,14 @@ fn open_shortcut_recorder(
 
 fn run(cx: &mut App) -> Result<(), String> {
     gpui_kit::init(cx);
-    macos::set_accessory_policy();
+    native::set_accessory_policy();
 
-    let platform: Rc<dyn Platform> = Rc::new(macos::MacPlatform::default());
+    let platform: Rc<dyn Platform> = Rc::new(native::NativePlatform::default());
     let screen = platform.main_screen().ok_or("no display found")?;
     platform::migrate_old_name();
     let config = Config::load_or_create(|id| platform.app_by_bundle_id(id).is_some())
         .map_err(|err| format!("couldn't read {}: {err}", Config::path().display()))?;
-    macos::set_appearance(config.appearance);
+    native::set_appearance(config.appearance);
     let history = History::load(&History::path());
     let dock: Entity<Dock> = cx.new(|cx| {
         Dock::new(
@@ -692,7 +829,7 @@ fn run(cx: &mut App) -> Result<(), String> {
         frame.width,
         frame.height,
         geometry::DOCK_RADIUS,
-        macos::Backdrop::Dock,
+        native::Backdrop::Dock,
         |window, cx| cx.new(|cx| DockView::new(dock.clone(), window, cx)),
     )?;
     let card_panel = open_panel(
@@ -700,10 +837,10 @@ fn run(cx: &mut App) -> Result<(), String> {
         300.0,
         200.0,
         geometry::CARD_RADIUS,
-        macos::Backdrop::Card,
+        native::Backdrop::Card,
         |window, cx| cx.new(|cx| CardView::new(dock.clone(), chrome.clone(), window, cx)),
     )?;
-    macos::hide_card(&card_panel.window, None);
+    native::hide_card(&card_panel.window, None);
 
     // Global shortcuts: each registered index maps to a dock item.
     let shortcuts: SharedShortcuts = Rc::new(RefCell::new(None));
@@ -726,6 +863,7 @@ fn run(cx: &mut App) -> Result<(), String> {
     register_shortcuts(&dock, &shortcuts, cx);
 
     let history_window = Rc::new(RefCell::new(HistoryWindow::default()));
+    let plugin_windows = PluginWindows::default();
     let opener = dock.clone();
     let registry = shortcuts.clone();
     cx.subscribe(&dock, move |_, event, cx| match event {
@@ -735,6 +873,14 @@ fn run(cx: &mut App) -> Result<(), String> {
             }
         }
         DockEvent::ShortcutsChanged => register_shortcuts(&opener, &registry, cx),
+        DockEvent::OpenPluginWindow { plugin, key } => {
+            if let Err(err) = open_plugin_window(&opener, &plugin_windows, plugin, key, cx) {
+                eprintln!("sidedoor: couldn't open {plugin}'s {key} window: {err}");
+            }
+        }
+        DockEvent::ClosePluginWindow { plugin, key } => {
+            close_plugin_window(&plugin_windows, &(plugin.clone(), key.clone()), cx);
+        }
     })
     .detach();
 
@@ -822,17 +968,24 @@ fn relaunch() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let spawned = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg("sleep 0.6; exec \"$0\"")
-        .arg(exe)
-        .spawn();
+    let spawned = native::relaunch(&exe);
     if let Err(err) = spawned {
         eprintln!("sidedoor: couldn't relaunch: {err}");
     }
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    native::wait_for_previous_process();
+    #[cfg(target_os = "windows")]
+    let _instance = match windows::instance::Instance::acquire() {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("sidedoor: couldn't acquire application instance: {error}");
+            return;
+        }
+    };
     // Every Lucide icon, so plugins can use any of them by name.
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)

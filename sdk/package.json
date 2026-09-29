@@ -6,11 +6,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
-    "./jsx-dev-runtime": "./src/jsx-runtime.ts"
+    "./jsx-dev-runtime": "./src/jsx-runtime.ts",
+    "./testing": "./src/testing.ts"
   },
   "types": "./src/index.ts",
   "scripts": {
     "test": "bun test",
     "check": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
   }
 }

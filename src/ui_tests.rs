@@ -158,6 +158,7 @@ fn move_pointer(window: &mut Window, x: f32, y: f32, cx: &mut App) {
 #[gpui_kit::test]
 fn hovering_an_item_opens_its_card_until_the_pointer_leaves(cx: &mut TestAppContext) {
     let h = setup(cx, vec![app("com.example.alpha"), ItemConfig::Stats]);
+    cx.run_until_parked();
     h.reveal(cx);
 
     cx.update_window(h.dock_window, |_, window, cx| {
@@ -165,19 +166,21 @@ fn hovering_an_item_opens_its_card_until_the_pointer_leaves(cx: &mut TestAppCont
         window.hover("app:com.example.alpha", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(h.open_card_id(cx).as_deref(), Some("app:com.example.alpha"));
 
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("stats", cx);
+        window.hover("plugin:builtin.stats", cx);
     })
     .unwrap();
-    assert_eq!(h.open_card_id(cx).as_deref(), Some("stats"));
+    cx.run_until_parked();
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:builtin.stats"));
 
     // Leaving the item starts a short grace period, then the card closes.
     cx.update_window(h.dock_window, |_, window, cx| move_to_padding(window, cx))
         .unwrap();
-    assert_eq!(h.open_card_id(cx).as_deref(), Some("stats"));
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:builtin.stats"));
     cx.executor().advance_clock(Duration::from_millis(300));
     cx.run_until_parked();
     assert_eq!(h.open_card_id(cx), None);
@@ -186,21 +189,27 @@ fn hovering_an_item_opens_its_card_until_the_pointer_leaves(cx: &mut TestAppCont
 #[gpui_kit::test]
 fn moving_onto_the_card_keeps_it_open(cx: &mut TestAppContext) {
     let h = setup(cx, vec![ItemConfig::Clipboard]);
+    cx.run_until_parked();
     h.reveal(cx);
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("clipboard", cx);
+        window.hover("plugin:builtin.clipboard", cx);
         move_to_padding(window, cx);
     })
     .unwrap();
+    cx.run_until_parked();
     cx.update_window(h.card_window, |_, window, cx| {
         window.render_frame(cx);
         window.hover("card", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(h.open_card_id(cx).as_deref(), Some("clipboard"));
+    assert_eq!(
+        h.open_card_id(cx).as_deref(),
+        Some("plugin:builtin.clipboard")
+    );
 }
 
 #[gpui_kit::test]
@@ -227,6 +236,7 @@ fn clicking_an_app_opens_it(cx: &mut TestAppContext) {
         window.click("app:com.example.beta", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         *h.platform.opened.borrow(),
         vec![PathBuf::from("/Applications/Beta.app")]
@@ -249,6 +259,7 @@ fn dragging_reorders_and_saves(cx: &mut TestAppContext) {
         window.drag_to("app:com.example.alpha", "app:com.example.gamma", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         h.item_ids(cx),
         [
@@ -287,10 +298,17 @@ fn dropped_apps_are_added_once_and_others_ignored(cx: &mut TestAppContext) {
     assert_eq!(added, 1);
     assert_eq!(
         h.item_ids(cx),
-        ["app:com.example.alpha", "app:com.example.delta", "weather"]
+        [
+            "app:com.example.alpha",
+            "app:com.example.delta",
+            "plugin:builtin.weather"
+        ]
     );
 
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.remove("weather", cx)));
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.remove("plugin:builtin.weather", cx))
+    });
     assert_eq!(
         h.item_ids(cx),
         ["app:com.example.alpha", "app:com.example.delta"]
@@ -316,18 +334,30 @@ fn copies_show_in_the_card_and_click_to_copy_back(cx: &mut TestAppContext) {
         (history.entries[0].id, history.entries[1].id)
     });
 
+    cx.run_until_parked();
     h.reveal(cx);
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("clipboard", cx);
+        window.hover("plugin:builtin.clipboard", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     cx.update_window(h.card_window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.find(("clip", newest)).visible());
-        window.click(("clip", oldest), cx);
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!(
+                    "plugin:builtin.clipboard:clip:{newest}"
+                )))
+                .visible()
+        );
+        window.click(
+            gpui_kit::SharedString::from(format!("plugin:builtin.clipboard:clip:{oldest}")),
+            cx,
+        );
     })
     .unwrap();
+    cx.run_until_parked();
 
     assert_eq!(
         *h.platform.written.borrow(),
@@ -341,15 +371,17 @@ fn copies_show_in_the_card_and_click_to_copy_back(cx: &mut TestAppContext) {
     // One click only arms Clear History; the second clears.
     cx.update_window(h.card_window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("clear-history", cx);
+        window.click("plugin:builtin.clipboard:clear-history", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 2);
     cx.update_window(h.card_window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("clear-history", cx);
+        window.click("plugin:builtin.clipboard:clear-history", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 0);
 }
 
@@ -402,9 +434,14 @@ impl HistoryHarness {
     }
 
     fn press(&self, cx: &mut TestAppContext, key: &str) {
+        let key = if cfg!(windows) {
+            key.replace("cmd-", "ctrl-")
+        } else {
+            key.to_owned()
+        };
         cx.update_window(self.window, |_, window, cx| {
             window.render_frame(cx);
-            window.press(key, cx);
+            window.press(&key, cx);
         })
         .unwrap();
     }
@@ -431,6 +468,7 @@ fn history_window_filters_as_you_type_and_moves_with_arrows(cx: &mut TestAppCont
         assert!(window.find(("history-row", 1u64)).visible());
     })
     .unwrap();
+    cx.run_until_parked();
     h.press(cx, "down");
     assert_eq!(h.selected_title(cx).as_deref(), Some("alpha notes"));
 
@@ -478,6 +516,7 @@ fn history_window_filter_segments_narrow_by_type(cx: &mut TestAppContext) {
         assert!(window.find(("history-row", 2u64)).visible());
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         h.selected_title(cx).as_deref(),
         Some("https://example.com/page")
@@ -505,6 +544,7 @@ fn image_previews_fit_their_frame(cx: &mut TestAppContext) {
         assert!((center(image).y - center(frame).y).abs() < px(1.0));
     })
     .unwrap();
+    cx.run_until_parked();
 }
 
 #[gpui_kit::test]
@@ -522,24 +562,28 @@ fn show_all_opens_the_history_window(cx: &mut TestAppContext) {
         })
         .detach();
     });
+    cx.run_until_parked();
     h.reveal(cx);
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("clipboard", cx);
+        window.hover("plugin:builtin.clipboard", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     cx.update_window(h.card_window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("show-all-history", cx);
+        window.click("plugin:builtin.clipboard:show-all-history", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(opened.get(), 1);
     // Clicking the clipboard tile itself opens it too.
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("clipboard", cx);
+        window.click("plugin:builtin.clipboard", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(opened.get(), 2);
 }
 
@@ -577,19 +621,25 @@ fn shortcuts_open_apps_history_and_peek_at_widgets(cx: &mut TestAppContext) {
     );
 
     cx.update(|cx| {
-        h.dock
-            .update(cx, |dock, cx| dock.trigger_shortcut("clipboard", cx))
+        h.dock.update(cx, |dock, cx| {
+            dock.trigger_shortcut("plugin:builtin.clipboard", cx)
+        })
     });
+    cx.run_until_parked();
     assert_eq!(opened.get(), 1);
 
     // A widget shortcut shows the dock with that widget's card.
     assert!(!cx.update(|cx| h.dock.read(cx).is_shown()));
     cx.update(|cx| {
-        h.dock
-            .update(cx, |dock, cx| dock.trigger_shortcut("weather", cx))
+        h.dock.update(cx, |dock, cx| {
+            dock.trigger_shortcut("plugin:builtin.weather", cx)
+        })
     });
     assert!(cx.update(|cx| h.dock.read(cx).is_shown()));
-    assert_eq!(h.open_card_id(cx).as_deref(), Some("weather"));
+    assert_eq!(
+        h.open_card_id(cx).as_deref(),
+        Some("plugin:builtin.weather")
+    );
 }
 
 #[gpui_kit::test]
@@ -711,6 +761,7 @@ fn recorder_cancels_with_escape_and_removes_existing(cx: &mut TestAppContext) {
         window.press("escape", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         *events.borrow(),
         vec![RecorderEvent::Remove, RecorderEvent::Cancel]
@@ -783,9 +834,14 @@ impl SettingsHarness {
     }
 
     fn press(&self, cx: &mut TestAppContext, key: &str) {
+        let key = if cfg!(windows) {
+            key.replace("cmd-", "ctrl-")
+        } else {
+            key.to_owned()
+        };
         cx.update_window(self.window, |_, window, cx| {
             window.render_frame(cx);
-            window.press(key, cx);
+            window.press(&key, cx);
         })
         .unwrap();
     }
@@ -821,6 +877,25 @@ fn settings_tabs_switch_by_click_and_command_number(cx: &mut TestAppContext) {
     assert!(h.events.borrow().is_empty());
     h.press(cx, "cmd-w");
     assert_eq!(*h.events.borrow(), vec![SettingsEvent::Dismiss]);
+}
+
+#[gpui_kit::test]
+fn builtins_can_be_added_from_plugins_and_removed_like_other_items(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![]);
+    h.press(cx, "cmd-4");
+    h.click(cx, "install-plugin:builtin.clipboard");
+    cx.run_until_parked();
+    assert_eq!(h.item_ids(cx), ["plugin:builtin.clipboard"]);
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        let state = dock.plugin(crate::builtins::CLIPBOARD).unwrap();
+        assert!(state.problem.is_none());
+        assert!(state.tile.is_some() && state.card.is_some());
+    });
+    h.press(cx, "cmd-3");
+    h.click(cx, "remove:plugin:builtin.clipboard");
+    assert!(h.item_ids(cx).is_empty());
+    assert!(cx.update(|cx| h.dock.read(cx).plugin(crate::builtins::CLIPBOARD).is_none()));
 }
 
 #[gpui_kit::test]
@@ -864,7 +939,10 @@ fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
     );
     h.press(cx, "cmd-3");
     h.click(cx, "remove:app:com.example.beta");
-    assert_eq!(h.item_ids(cx), ["app:com.example.alpha", "weather"]);
+    assert_eq!(
+        h.item_ids(cx),
+        ["app:com.example.alpha", "plugin:builtin.weather"]
+    );
 
     // Only missing widgets are offered.
     cx.update_window(h.window, |_, window, cx| {
@@ -872,27 +950,45 @@ fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
         assert!(window.try_find("add-widget:Weather").is_none());
     })
     .unwrap();
+    cx.run_until_parked();
     h.click(cx, "add-widget:Stats");
     assert_eq!(
         h.item_ids(cx),
-        ["app:com.example.alpha", "weather", "stats"]
+        [
+            "app:com.example.alpha",
+            "plugin:builtin.weather",
+            "plugin:builtin.stats"
+        ]
     );
 
     cx.update_window(h.window, |_, window, cx| {
         window.render_frame(cx);
-        window.drag_to("item-row:app:com.example.alpha", "item-row:stats", cx);
+        window.drag_to(
+            "item-row:app:com.example.alpha",
+            "item-row:plugin:builtin.stats",
+            cx,
+        );
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         h.item_ids(cx),
-        ["weather", "stats", "app:com.example.alpha"]
+        [
+            "plugin:builtin.weather",
+            "plugin:builtin.stats",
+            "app:com.example.alpha"
+        ]
     );
     let saved = h.platform.saved_configs.borrow();
     assert_eq!(
         saved.last().map(|config| config.items.clone()),
         Some(vec![
-            ItemConfig::Weather,
-            ItemConfig::Stats,
+            ItemConfig::Plugin {
+                id: crate::builtins::WEATHER.into()
+            },
+            ItemConfig::Plugin {
+                id: crate::builtins::STATS.into()
+            },
             app("com.example.alpha")
         ])
     );
@@ -906,6 +1002,7 @@ fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
         h.view.update(cx, |view, cx| view.focus_city(window, cx));
     })
     .unwrap();
+    cx.run_until_parked();
     cx.update_window(h.window, |_, window, cx| window.input("Aal", cx))
         .unwrap();
     // Nothing is looked up until typing pauses.
@@ -914,6 +1011,7 @@ fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
         assert!(window.try_find(("place", 0usize)).is_none());
     })
     .unwrap();
+    cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(350));
     cx.run_until_parked();
 
@@ -937,6 +1035,7 @@ fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
         assert!(window.try_find(("place", 0usize)).is_none());
     })
     .unwrap();
+    cx.run_until_parked();
 }
 
 // MARK: Plugins
@@ -951,6 +1050,83 @@ fn render(surface: &str, tree: serde_json::Value) -> PluginMessage {
         surface: surface.into(),
         tree: serde_json::from_value(tree).unwrap(),
     }
+}
+
+#[gpui_kit::test]
+fn builtins_keep_card_sizes_and_receive_only_their_requested_data(cx: &mut TestAppContext) {
+    use crate::plugin::DataSource;
+    let h = setup(
+        cx,
+        vec![
+            ItemConfig::Weather,
+            ItemConfig::Stats,
+            ItemConfig::Clipboard,
+            ItemConfig::Plugin {
+                id: "counter".into(),
+            },
+        ],
+    );
+    cx.run_until_parked();
+    for (id, source) in [
+        (crate::builtins::WEATHER, DataSource::Weather),
+        (crate::builtins::STATS, DataSource::Stats),
+        (crate::builtins::CLIPBOARD, DataSource::Clipboard),
+    ] {
+        let messages = sent(&h, id);
+        assert!(messages.iter().any(
+            |message| matches!(message, HostMessage::Data { source: got, .. } if *got == source)
+        ));
+        assert!(!messages.iter().any(
+            |message| matches!(message, HostMessage::Data { source: got, .. } if *got != source)
+        ));
+    }
+    assert!(
+        !sent(&h, "counter")
+            .iter()
+            .any(|message| matches!(message, HostMessage::Data { .. }))
+    );
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert_eq!(
+            crate::views::card_size(&dock.items[0], dock, |_| 0.0),
+            (300.0, 190.0)
+        );
+        assert_eq!(
+            crate::views::card_size(&dock.items[1], dock, |_| 0.0),
+            (300.0, 206.0)
+        );
+    });
+    for index in 0..7 {
+        h.platform
+            .copy(ClipKind::from_text(format!("Copy {index}")));
+        cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
+    }
+    cx.run_until_parked();
+    open_plugin_card(&h, cx, "plugin:builtin.clipboard");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert_eq!(
+            dock.plugin(crate::builtins::CLIPBOARD).unwrap().height,
+            Some(322.0)
+        );
+        assert_eq!(
+            crate::views::card_size(&dock.items[2], dock, |_| 0.0),
+            (300.0, 322.0)
+        );
+    });
+    // Model notifications and rendering must not resend an unchanged feed.
+    let before = sent(&h, crate::builtins::CLIPBOARD)
+        .iter()
+        .filter(|m| matches!(m, HostMessage::Data { .. }))
+        .count();
+    cx.update(|cx| h.dock.update(cx, |_, cx| cx.notify()));
+    cx.run_until_parked();
+    let after = sent(&h, crate::builtins::CLIPBOARD)
+        .iter()
+        .filter(|m| matches!(m, HostMessage::Data { .. }))
+        .count();
+    assert_eq!(before, after);
 }
 
 /// Events the host sent to plugin `id`, as (handler, value).
@@ -978,6 +1154,7 @@ fn sent(h: &Harness, id: &str) -> Vec<HostMessage> {
 }
 
 fn open_plugin_card(h: &Harness, cx: &mut TestAppContext, item: &str) {
+    cx.run_until_parked();
     h.reveal(cx);
     let index = h.item_ids(cx).iter().position(|id| id == item).unwrap();
     cx.update(|cx| {
@@ -1026,6 +1203,7 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
         window.click("plugin:counter:sound", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         events(&h, "counter"),
         vec![
@@ -1051,6 +1229,84 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
         sent(&h, "counter").last(),
         Some(&HostMessage::Card { open: false })
     );
+}
+
+#[gpui_kit::test]
+fn plugin_text_fragments_and_titles_stay_on_one_line(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        render(
+            "card",
+            serde_json::json!([
+                {"t":"div","p":{"flex":true,"flex_col":true},"c":[
+                    {"t":"div","p":{"id":"count","text_size":12},"c":["33"," copied"]},
+                    {"t":"div","p":{"id":"count-reference","text_size":12},"c":["33 copied"]},
+                    {"t":"div","p":{"id":"detail","text_size":11,"truncate":true},"c":["3 min ago"," · Brave Browser"]},
+                    {"t":"div","p":{"id":"detail-reference","text_size":11,"truncate":true},"c":["3 min ago · Brave Browser"]},
+                    {"t":"div","p":{"id":"refresh","text_size":10},"c":["Refreshes every ","2"," s"]},
+                    {"t":"div","p":{"id":"refresh-reference","text_size":10},"c":["Refreshes every 2 s"]},
+                    {"t":"div","p":{"id":"heading"},"c":[{"t":"Title","c":["System"]}]},
+                    {"t":"div","p":{"id":"heading-reference","text_size":15,"font_weight":"semibold"},"c":["System"]}
+                ]}
+            ]),
+        ),
+    );
+    open_plugin_card(&h, cx, "plugin:counter");
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.render_frame(cx);
+        for name in ["count", "detail", "refresh", "heading"] {
+            let actual = window
+                .find(gpui_kit::SharedString::from(format!(
+                    "plugin:counter:{name}"
+                )))
+                .bounds();
+            let reference = window
+                .find(gpui_kit::SharedString::from(format!(
+                    "plugin:counter:{name}-reference"
+                )))
+                .bounds();
+            assert_eq!(
+                actual.size.height, reference.size.height,
+                "{name} gained an extra line"
+            );
+            assert!(actual.size.height > px(0.0));
+        }
+    })
+    .unwrap();
+    // Joining for display must not change the protocol paths used by patches.
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::Patch {
+            surface: "card".into(),
+            patches: serde_json::from_value(serde_json::json!([
+                {"op":"replace","path":[0,4,1],"node":"5"}
+            ]))
+            .unwrap(),
+        },
+    );
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("plugin:counter:refresh").bounds().size.height,
+            window
+                .find("plugin:counter:refresh-reference")
+                .bounds()
+                .size
+                .height
+        );
+    })
+    .unwrap();
+    assert!(!sent(&h, "counter").contains(&HostMessage::Resync));
 }
 
 #[gpui_kit::test]
@@ -1090,6 +1346,7 @@ fn plugin_patches_update_the_tree_and_mismatches_resync(cx: &mut TestAppContext)
         );
     })
     .unwrap();
+    cx.run_until_parked();
 
     // A patch for a node that isn't there means the two sides disagree.
     plugin_says(
@@ -1131,11 +1388,13 @@ fn plugin_inputs_report_typing_and_submit(cx: &mut TestAppContext) {
         window.input("Ada", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     cx.update_window(h.card_window, |_, window, cx| {
         window.render_frame(cx);
         window.press("enter", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     let got = events(&h, "counter");
     assert_eq!(
         got.last(),
@@ -1151,6 +1410,7 @@ fn plugin_inputs_report_typing_and_submit(cx: &mut TestAppContext) {
         window.input("B", cx);
     })
     .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         events(&h, "counter").last(),
         Some(&("change".to_string(), serde_json::Value::from("B")))
@@ -1199,12 +1459,12 @@ fn plugins_show_their_problems_and_ask_before_being_added(cx: &mut TestAppContex
     h.click(cx, "add-plugin:counter");
     cx.simulate_prompt_answer("Cancel");
     cx.run_until_parked();
-    assert_eq!(h.item_ids(cx), ["weather"]);
+    assert_eq!(h.item_ids(cx), ["plugin:builtin.weather"]);
 
     h.click(cx, "add-plugin:counter");
     cx.simulate_prompt_answer("Add Plugin");
     cx.run_until_parked();
-    assert_eq!(h.item_ids(cx), ["weather", "plugin:counter"]);
+    assert_eq!(h.item_ids(cx), ["plugin:builtin.weather", "plugin:counter"]);
     assert_eq!(
         h.platform
             .saved_configs
@@ -1361,6 +1621,7 @@ fn plugin_transitions_ease_and_scroll_areas_clip(cx: &mut TestAppContext) {
         );
     })
     .unwrap();
+    cx.run_until_parked();
 }
 
 #[gpui_kit::test]
@@ -1444,5 +1705,167 @@ fn plugin_notifications_carry_the_plugins_name(cx: &mut TestAppContext) {
     assert_eq!(
         *h.platform.notified.borrow(),
         [["Counter", "Time's up", "Take a break."].map(String::from)]
+    );
+}
+
+#[gpui_kit::test]
+fn plugins_draw_line_area_and_bar_charts(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let data = serde_json::json!([
+        { "label": "Mon", "value": 3 }, { "label": "Tue", "value": 5 }, { "label": "Wed", "value": 2 }
+    ]);
+    let chart = |id: &str, kind: &str, height: u32| {
+        serde_json::json!({ "t": "div", "p": { "id": id }, "c": [
+            { "t": "Chart", "p": { "kind": kind, "data": data, "h": height, "color": "orange" }, "c": [] }
+        ]})
+    };
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        render(
+            "card",
+            serde_json::json!([{ "t": "div", "p": { "flex": true, "flex_col": true }, "c": [
+                chart("line", "line", 60), chart("area", "area", 70), chart("bar", "bar", 80)
+            ]}]),
+        ),
+    );
+    open_plugin_card(&h, cx, "plugin:counter");
+    cx.update_window(h.card_window, |_, window, _| {
+        for (id, height) in [("line", 60.0), ("area", 70.0), ("bar", 80.0)] {
+            let size = window
+                .find(gpui_kit::SharedString::from(format!("plugin:counter:{id}")))
+                .bounds()
+                .size;
+            assert_eq!(size.height, px(height), "{id}");
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn plugin_windows_open_draw_and_close(cx: &mut TestAppContext) {
+    use crate::dock::DockEvent;
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = events.clone();
+    cx.update(|cx| {
+        cx.subscribe(&h.dock, move |_, event: &DockEvent, _| {
+            seen.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    let window_event = |open| HostMessage::Window {
+        key: "history".into(),
+        open,
+    };
+
+    // An undeclared window is refused and logged.
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::OpenWindow { key: "nope".into() },
+    );
+    assert!(events.borrow().is_empty());
+
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::OpenWindow {
+            key: "history".into(),
+        },
+    );
+    assert_eq!(
+        *events.borrow(),
+        [DockEvent::OpenPluginWindow {
+            plugin: "counter".into(),
+            key: "history".into()
+        }]
+    );
+    assert_eq!(sent(&h, "counter"), [window_event(true)]);
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        render(
+            "window:history",
+            serde_json::json!([{ "t": "div", "p": { "id": "list", "h": 40 }, "c": ["3 clicks"] }]),
+        ),
+    );
+
+    let dock = h.dock.clone();
+    let (window, _) = cx.update(|cx| {
+        gpui_kit::open_window(options(400.0, 300.0), cx, |window, cx| {
+            cx.new(|cx| {
+                crate::plugin_window::PluginWindow::new(
+                    dock,
+                    "counter".into(),
+                    "history".into(),
+                    "Counter History".into(),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let list = window.find("plugin:counter:list").bounds();
+        assert_eq!(list.size.height, px(40.0));
+        // Below the title bar.
+        assert!(list.origin.y >= px(crate::plugin_window::TITLE_BAR));
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    // The close button tells the plugin, once.
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, _| {
+            dock.plugin_window_closed("counter", "history");
+            dock.plugin_window_closed("counter", "history");
+        })
+    });
+    assert_eq!(
+        sent(&h, "counter"),
+        [window_event(true), window_event(false)]
+    );
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert!(dock.plugin("counter").unwrap().windows.is_empty());
+    });
+
+    // Removing the plugin closes what it had open.
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::OpenWindow {
+            key: "history".into(),
+        },
+    );
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.remove("plugin:counter", cx))
+    });
+    assert_eq!(
+        events.borrow().last(),
+        Some(&DockEvent::ClosePluginWindow {
+            plugin: "counter".into(),
+            key: "history".into()
+        })
     );
 }
