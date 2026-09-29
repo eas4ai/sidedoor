@@ -7,9 +7,9 @@ import {
 } from "../src";
 import { mount } from "../src/testing";
 import { reset } from "../src/runtime";
-import weather from "../../src/builtins/weather";
-import stats from "../../src/builtins/stats";
-import clipboard from "../../src/builtins/clipboard";
+import weather from "../../crates/desktop/src/builtins/weather";
+import stats from "../../crates/desktop/src/builtins/stats";
+import clipboard from "../../crates/desktop/src/builtins/clipboard";
 
 afterEach(reset);
 

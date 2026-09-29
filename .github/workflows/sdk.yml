@@ -1,0 +1,22 @@
+name: SDK
+on:
+  push:
+    branches: [main, 'codex/cargo-workspace']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - run: bun install --frozen-lockfile
+        working-directory: sdk
+      - run: bun test
+        working-directory: sdk
+      - run: bun run check
+        working-directory: sdk

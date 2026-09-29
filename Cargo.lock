@@ -1413,6 +1413,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop"
+version = "0.1.0"
+dependencies = [
+ "domain",
+ "futures",
+ "gpui-kit",
+ "platform",
+ "plugin-host",
+ "serde",
+ "serde_json",
+ "services",
+ "winresource",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1521,6 +1536,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
+]
+
+[[package]]
+name = "domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5030,6 +5053,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "platform"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "block2 0.6.2",
+ "clipboard-win",
+ "domain",
+ "gpui-kit",
+ "image",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "objc2-service-management",
+ "objc2-user-notifications",
+ "raw-window-handle",
+ "windows 0.61.3",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "plugin-host"
+version = "0.1.0"
+dependencies = [
+ "domain",
+ "futures",
+ "platform",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6251,6 +6307,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "services"
+version = "0.1.0"
+dependencies = [
+ "domain",
+ "platform",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "ureq",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6307,33 +6375,6 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
-name = "sidedoor"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "block2 0.6.2",
- "clipboard-win",
- "futures",
- "gpui-kit",
- "image",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-core-graphics",
- "objc2-foundation 0.3.2",
- "objc2-quartz-core 0.3.2",
- "objc2-service-management",
- "objc2-user-notifications",
- "raw-window-handle",
- "serde",
- "serde_json",
- "sysinfo",
- "ureq",
- "windows 0.61.3",
- "windows-sys 0.61.2",
- "winresource",
-]
 
 [[package]]
 name = "signal-hook-registry"

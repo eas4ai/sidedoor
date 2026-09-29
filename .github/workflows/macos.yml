@@ -1,0 +1,38 @@
+name: macOS
+on:
+  push:
+    branches: [main, 'codex/cargo-workspace']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Rust toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: SDK dependencies for UI tests
+        working-directory: sdk
+        run: bun install --frozen-lockfile
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Rust tests
+        run: cargo test --workspace --locked
+      - name: Clippy
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Packaging dependencies
+        run: brew install librsvg
+      - name: Package
+        run: ./scripts/package/macos.sh
