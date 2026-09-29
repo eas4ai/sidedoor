@@ -652,10 +652,13 @@ impl PluginCard {
                     plugin: self.manifest.id.clone().into(),
                     palette,
                 };
+                // Whatever doesn't fit is cut off at the card's edge rather
+                // than drawn over the arrow.
                 div()
                     .size_full()
                     .flex()
                     .flex_col()
+                    .overflow_hidden()
                     .children(surface.render(tree, "card", window, cx))
                     .into_any_element()
             }

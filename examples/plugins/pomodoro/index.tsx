@@ -66,20 +66,22 @@ export default widget({
         <div h={6} w_full rounded_full bg="track">
           <div h_full rounded_full bg="orange" w={`${Math.round(progress * 100)}%`} transition={900} />
         </div>
-        <div flex items_center gap={8} mt={4}>
-          <Segmented
-            flex_1
-            options={LENGTHS.map((length) => `${length} min`)}
-            selected={LENGTHS.indexOf(minutes)}
-            on_change={(index) => restart(LENGTHS[index])}
-          />
+        <Segmented
+          w_full
+          mt={2}
+          options={LENGTHS.map((length) => `${length} min`)}
+          selected={LENGTHS.indexOf(minutes)}
+          on_change={(index) => restart(LENGTHS[index])}
+        />
+        <div flex gap={8}>
           <Button
+            flex_1
             variant="primary"
             icon={running ? "pause" : "play"}
             label={running ? "Pause" : "Start"}
             on_click={() => timer.set((t) => ({ ...t, running: !t.running }))}
           />
-          <Button icon="rotate-ccw" on_click={() => restart(minutes)} />
+          <Button icon="rotate-ccw" label="Reset" on_click={() => restart(minutes)} />
         </div>
       </Card>
     );
