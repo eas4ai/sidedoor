@@ -1,5 +1,5 @@
 export * from "./components";
-export { definePlugin, describe, sidedoor, useCardOpen, useSetting, useStorage } from "./host";
+export { definePlugin, describe, sidedoor, useCardOpen, useData, useSetting, useStorage } from "./host";
 export type {
   HostMessage,
   Manifest,
@@ -24,3 +24,5 @@ export {
   useState,
 } from "./runtime";
 export type * from "./types";
+
+export type * from "./data";

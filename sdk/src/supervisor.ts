@@ -12,6 +12,8 @@
 // worker is asked for its hook and store state, and a start soon after hands
 // it to the new worker, so a save keeps what's on screen.
 
+import { pathToFileURL } from "node:url";
+
 interface Start {
   type: "start";
   plugin: string;
@@ -57,7 +59,7 @@ async function start(line: Start) {
   const kept = await stopping.get(plugin);
   stopping.delete(plugin);
   const snapshot = kept && Date.now() - kept.at < RELOAD_WINDOW ? kept.state : null;
-  const worker = new Worker(new URL(`file://${line.entry}`).href, {
+  const worker = new Worker(pathToFileURL(line.entry).href, {
     env: {
       ...process.env,
       SIDEDOOR_PLUGIN: "1",

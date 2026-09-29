@@ -13,6 +13,7 @@ import type {
   KeycapProps,
   ListRowProps,
   MeterProps,
+  NumberTextProps,
   SegmentedProps,
   SpacerProps,
   SparklineProps,
@@ -45,6 +46,7 @@ export const Switch = native<SwitchProps>("Switch");
 /** A segmented control, as in the Clipboard History filters. */
 export const Segmented = native<SegmentedProps>("Segmented");
 /** A labelled gauge, as in the Stats card. */
+export const NumberText = native<NumberTextProps>("NumberText");
 export const Meter = native<MeterProps>("Meter");
 /** A list row with an icon, title and subtitle, as in the Clipboard card. */
 export const ListRow = native<ListRowProps>("ListRow");

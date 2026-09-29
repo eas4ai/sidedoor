@@ -157,7 +157,17 @@ impl SettingsWindow {
                 }
                 let keystroke = &event.keystroke;
                 let modifiers = keystroke.modifiers;
-                if !modifiers.platform || modifiers.alt || modifiers.control || modifiers.shift {
+                let primary = if cfg!(windows) {
+                    modifiers.control
+                } else {
+                    modifiers.platform
+                };
+                let other = if cfg!(windows) {
+                    modifiers.platform
+                } else {
+                    modifiers.control
+                };
+                if !primary || modifiers.alt || other || modifiers.shift {
                     return;
                 }
                 let handled = view
@@ -682,7 +692,7 @@ fn general_page(dock_entity: &Entity<Dock>, dock: &Dock, palette: Palette) -> Ve
         .gap(px(8.0))
         .child(push_button(
             "reveal-config",
-            "Show in Finder",
+            crate::platform::REVEAL_LABEL,
             palette,
             true,
             false,
@@ -709,8 +719,12 @@ fn general_page(dock_entity: &Entity<Dock>, dock: &Dock, palette: Palette) -> Ve
             vec![row(
                 "Clipboard history",
                 Some(match count {
-                    1 => "1 item kept on this Mac.".into(),
-                    count => format!("{count} items kept on this Mac.").into(),
+                    1 => format!("1 item kept on this {}.", crate::platform::COMPUTER_NAME).into(),
+                    count => format!(
+                        "{count} items kept on this {}.",
+                        crate::platform::COMPUTER_NAME
+                    )
+                    .into(),
                 }),
                 clear,
                 palette,
@@ -801,7 +815,14 @@ fn dock_page(dock_entity: &Entity<Dock>, dock: &Dock, palette: Palette) -> Vec<A
             Some("Appearance"),
             vec![row(
                 "Theme",
-                Some("Automatic follows macOS.".into()),
+                Some(
+                    if cfg!(windows) {
+                        "Automatic follows Windows."
+                    } else {
+                        "Automatic follows macOS."
+                    }
+                    .into(),
+                ),
                 theme_picker,
                 palette,
             )],
@@ -843,11 +864,13 @@ fn item_icon(item: &DockItem, palette: Palette) -> AnyElement {
             .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
-    let fill = match item.kind {
-        ItemKind::Weather => palette.blue,
-        ItemKind::Clipboard => palette.purple,
-        ItemKind::Stats => palette.green,
-        ItemKind::Plugin(_) => palette.orange,
+    let fill = match &item.kind {
+        ItemKind::Plugin(manifest) => match manifest.id.as_str() {
+            crate::builtins::WEATHER => palette.blue,
+            crate::builtins::CLIPBOARD => palette.purple,
+            crate::builtins::STATS => palette.green,
+            _ => palette.orange,
+        },
         ItemKind::App(_) => palette.fill,
     };
     div()
@@ -1045,7 +1068,11 @@ fn items_page(
         ));
     }
 
-    for manifest in dock.available_plugins() {
+    for manifest in dock
+        .available_plugins()
+        .into_iter()
+        .filter(|manifest| !crate::builtins::contains(&manifest.id))
+    {
         let handler = dock_entity.clone();
         let id = SharedString::from(format!("add-plugin:{}", manifest.id));
         additions.push(row(

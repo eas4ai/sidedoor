@@ -20,6 +20,10 @@ BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 OUT="target/release/bundle"
 APP="$OUT/$NAME.app"
 
+# Resolve wrappers (e.g. a package-manager shim) to the real Bun executable.
+BUN_BIN=$("${SIDEDOOR_BUN:-bun}" -p 'process.execPath')
+[ -x "$BUN_BIN" ] || { echo "Bun executable not found" >&2; exit 1; }
+
 echo "Building release binary…"
 cargo build --release --locked
 
@@ -27,6 +31,18 @@ echo "Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "target/release/$EXECUTABLE" "$APP/Contents/MacOS/$EXECUTABLE"
+cp "$BUN_BIN" "$APP/Contents/MacOS/bun"
+chmod +x "$APP/Contents/MacOS/bun"
+# Keep Bun's JIT entitlements when signing its nested executable.
+codesign --force --sign - --preserve-metadata=entitlements,flags,runtime --timestamp=none "$APP/Contents/MacOS/bun"
+
+# Built-ins are ordinary plugins, bundled so they require no writable SDK
+# links or dependencies inside the signed app.
+for plugin in weather clipboard stats; do
+    mkdir -p "$APP/Contents/Resources/builtins/$plugin"
+    "$BUN_BIN" build "src/builtins/$plugin/index.tsx" --target=bun \
+        --outfile "$APP/Contents/Resources/builtins/$plugin/index.js"
+done
 
 # The plugin SDK, which plugins import as `@sidedoor/sdk`.
 mkdir -p "$APP/Contents/Resources/sdk"

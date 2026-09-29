@@ -119,6 +119,12 @@ fn field_box(
 
 /// Asks before adding a plugin: it will run with this app's access.
 pub fn confirm_add(dock: Entity<Dock>, manifest: Manifest, window: &mut Window, cx: &mut App) {
+    if crate::builtins::contains(&manifest.id) {
+        dock.update(cx, |dock, cx| {
+            dock.add_plugin(manifest, cx);
+        });
+        return;
+    }
     let answer = window.prompt(
         PromptLevel::Warning,
         &format!("Add “{}” to the dock?", manifest.name),
@@ -386,6 +392,14 @@ pub fn plugins_page(
                 )),
             palette,
         )];
+        if crate::builtins::contains(&manifest.id) {
+            rows = vec![row(
+                "Built-in",
+                Some("Included with Sidedoor.".into()),
+                div(),
+                palette,
+            )];
+        }
         for spec in &manifest.settings {
             let current = plugin.values.get(&spec.key).cloned().unwrap_or(Value::Null);
             rows.push(setting_row(
@@ -416,10 +430,23 @@ pub fn plugins_page(
                 let id = SharedString::from(format!("install-plugin:{}", manifest.id));
                 row(
                     manifest.name.clone(),
-                    Some(display(&manifest.dir).into()),
-                    push_button(id, "Add…", palette, true, false, move |window, cx| {
-                        confirm_add(dock.clone(), manifest.clone(), window, cx)
+                    Some(if crate::builtins::contains(&manifest.id) {
+                        "Included with Sidedoor.".into()
+                    } else {
+                        display(&manifest.dir).into()
                     }),
+                    push_button(
+                        id,
+                        if crate::builtins::contains(&manifest.id) {
+                            "Add"
+                        } else {
+                            "Add…"
+                        },
+                        palette,
+                        true,
+                        false,
+                        move |window, cx| confirm_add(dock.clone(), manifest.clone(), window, cx),
+                    ),
                     palette,
                 )
             })

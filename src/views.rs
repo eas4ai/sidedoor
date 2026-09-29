@@ -1,30 +1,26 @@
 //! The dock and its hover card, both read from the shared [`Dock`].
 
 use crate::{
-    clipboard::{self, ClipEntry, ClipKind},
-    dock::{Dock, DockItem, ItemKind, STATS_INTERVAL, WeatherState},
+    dock::{Dock, DockItem, ItemKind},
     geometry::{self as geometry, CardPlacement, DOCK_PADDING, DOCK_RADIUS, Edge, PathStep, SLOT},
     motion,
     platform::AppInfo,
-    stats::{Snapshot, format_bytes, format_memory},
     style::{Palette, text},
-    weather::{Condition, Weather},
 };
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::{
     Action, Animation, AnimationExt as _, AnyElement, App, AppContext as _, Bounds, Context, Div,
     Entity, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _, PathBuilder,
-    Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
-    Subscription, TestSupportExt as _, Window,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, PathBuilder, Pixels, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
+    Window,
     assets::IconName,
     base::{Easing, Spring, Transition, spring, transition},
-    canvas, div, img, point, px, relative, svg,
+    canvas, div, img, point,
+    prelude::FluentBuilder as _,
+    px, relative, svg,
 };
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::Duration};
 
 const APP_ICON: f32 = 44.0;
 const TILE: f32 = 36.0;
@@ -32,14 +28,8 @@ const TOOLTIP_HEIGHT: f64 = 28.0;
 const TOOLTIP_PADDING: f64 = 24.0;
 /// Space between a tooltip's name and its shortcut.
 const TOOLTIP_HINT_GAP: f64 = 8.0;
-const CARD_WIDTH: f64 = 300.0;
 /// A fitted plugin card's height until its content has been measured.
 const FITTED_START: f64 = 120.0;
-const WEATHER_HEIGHT: f64 = 190.0;
-const STATS_HEIGHT: f64 = 206.0;
-/// Clipboard entries shown on the card.
-pub const CLIPBOARD_ROWS: usize = 5;
-const CLIP_ROW: f64 = 46.0;
 
 // MARK: Actions
 
@@ -111,34 +101,7 @@ pub fn card_size(item: &DockItem, dock: &Dock, text_width: impl Fn(&str) -> f64)
                 manifest.height.or(fitted).unwrap_or(FITTED_START),
             )
         }
-        ItemKind::Weather => (CARD_WIDTH, WEATHER_HEIGHT),
-        ItemKind::Stats => (CARD_WIDTH, STATS_HEIGHT),
-        ItemKind::Clipboard => {
-            let rows = dock.history.len().min(CLIPBOARD_ROWS);
-            let height = if rows == 0 {
-                112.0
-            } else {
-                92.0 + rows as f64 * CLIP_ROW
-            };
-            (CARD_WIDTH, height)
-        }
     }
-}
-
-fn condition_icon(condition: Condition, is_day: bool) -> SharedString {
-    let name = match (condition, is_day) {
-        (Condition::Clear, true) => IconName::Sun,
-        (Condition::Clear, false) => IconName::Moon,
-        (Condition::PartlyCloudy, true) => IconName::CloudSun,
-        (Condition::PartlyCloudy, false) => IconName::CloudMoon,
-        (Condition::Cloudy, _) => IconName::Cloud,
-        (Condition::Fog, _) => IconName::CloudFog,
-        (Condition::Drizzle, _) => IconName::CloudDrizzle,
-        (Condition::Rain, _) => IconName::CloudRain,
-        (Condition::Snow, _) => IconName::CloudSnow,
-        (Condition::Thunderstorm, _) => IconName::CloudLightning,
-    };
-    name.path()
 }
 
 pub(crate) fn icon(path: SharedString, size: f32, color: Hsla) -> impl IntoElement {
@@ -147,22 +110,6 @@ pub(crate) fn icon(path: SharedString, size: f32, color: Hsla) -> impl IntoEleme
         .size(px(size))
         .flex_shrink_0()
         .text_color(color)
-}
-
-fn degrees(value: f64) -> String {
-    format!("{:.0}°", value.round())
-}
-
-fn percent(value: f32) -> String {
-    format!("{:.0}%", value.round())
-}
-
-fn single_line(element: Div) -> Div {
-    element
-        .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_ellipsis()
 }
 
 // MARK: Dock
@@ -302,16 +249,6 @@ impl DockView {
 impl Render for DockView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let motions = self.sample_motion(window, cx);
-        let (cpu, ram) = {
-            let stats = self.dock.read(cx).stats.clone();
-            (
-                stats.as_ref().map(|s| s.cpu),
-                stats.as_ref().map(Snapshot::memory_percent),
-            )
-        };
-        let cpu = cpu.map(|value| transition("tile:cpu", value, number_tween(), window, cx));
-        let ram = ram.map(|value| transition("tile:ram", value, number_tween(), window, cx));
-
         let view = cx.entity();
         let palette = Palette::new(window, self.dock.read(cx).accessibility);
         // Plugin tiles draw with the window, which the dock borrow below
@@ -364,11 +301,6 @@ impl Render for DockView {
             .map(|(index, (item, motion))| {
                 let content = match &item.kind {
                     ItemKind::App(app) => app_tile(app, motion, palette, vertical),
-                    ItemKind::Weather => weather_tile(&dock.weather, motion.scale, palette),
-                    ItemKind::Stats => stats_tile(cpu, ram, motion.scale, palette),
-                    ItemKind::Clipboard => {
-                        clipboard_tile(dock.history.len(), motion.scale, palette)
-                    }
                     ItemKind::Plugin(_) => plugin_tiles
                         .remove(&index)
                         .unwrap_or_else(|| div().into_any_element()),
@@ -434,11 +366,6 @@ impl Render for DockView {
 /// Cubic ease-out for fades.
 fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
-}
-
-/// Numbers ease toward new readings instead of jumping.
-fn number_tween() -> Transition {
-    Transition::new(Duration::from_millis(700)).easing(Easing::EaseOut)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -527,7 +454,10 @@ fn slot(
                 if is_app {
                     menu = menu
                         .menu("Open", Box::new(OpenItem { id: id.clone() }))
-                        .menu("Show in Finder", Box::new(RevealItem { id: id.clone() }))
+                        .menu(
+                            crate::platform::REVEAL_LABEL,
+                            Box::new(RevealItem { id: id.clone() }),
+                        )
                         .separator();
                 }
                 if !plugin_actions.is_empty() {
@@ -593,9 +523,6 @@ fn slot(
 
 pub fn widget_glyph(kind: &ItemKind) -> SharedString {
     match kind {
-        ItemKind::Weather => IconName::Cloud.path(),
-        ItemKind::Stats => IconName::Cpu.path(),
-        ItemKind::Clipboard => IconName::Clipboard.path(),
         ItemKind::App(_) => IconName::AppWindow.path(),
         ItemKind::Plugin(manifest) => manifest.icon_path().into(),
     }
@@ -635,7 +562,7 @@ fn plugin_tile(
         .flex_col()
         .items_center()
         .justify_center()
-        .children(surface.render(tile, "tile", window, cx))
+        .children(surface.render_tile(tile, scale, window, cx))
         .into_any_element()
 }
 
@@ -683,7 +610,8 @@ impl PluginCard {
                 // Whatever doesn't fit is cut off at the card's edge rather
                 // than drawn over the arrow.
                 div()
-                    .size_full()
+                    .w_full()
+                    .when(self.manifest.height.is_some(), |el| el.h_full())
                     .flex()
                     .flex_col()
                     .overflow_hidden()
@@ -750,115 +678,6 @@ fn app_tile(app: &AppInfo, motion: SlotMotion, palette: Palette, vertical: bool)
         .into_any_element()
 }
 
-fn weather_tile(state: &WeatherState, scale: f32, palette: Palette) -> AnyElement {
-    let (glyph, reading) = match state {
-        WeatherState::Ready { weather, .. } => (
-            condition_icon(weather.condition, weather.is_day),
-            degrees(weather.temperature),
-        ),
-        WeatherState::Loading => (IconName::Cloud.path(), "--°".to_string()),
-        WeatherState::Failed(_) => (IconName::CloudOff.path(), "--°".to_string()),
-    };
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(3.0 * scale))
-        .child(icon(glyph, 17.0 * scale, palette.label))
-        .child(
-            div()
-                .text_size(px(text::CALLOUT * scale))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(reading),
-        )
-        .into_any_element()
-}
-
-fn stats_tile(cpu: Option<f32>, ram: Option<f32>, scale: f32, palette: Palette) -> AnyElement {
-    let metric = |label: &'static str, value: Option<f32>| {
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .line_height(relative(1.05))
-            .child(
-                div()
-                    .text_size(px(text::MICRO * scale))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.secondary)
-                    .child(label),
-            )
-            .child(
-                div()
-                    .text_size(px(text::SUBHEADLINE * scale))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(value.map_or_else(|| "--".into(), percent)),
-            )
-    };
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(2.0 * scale))
-        .child(metric("CPU", cpu))
-        .child(metric("RAM", ram))
-        .into_any_element()
-}
-
-fn clipboard_tile(count: usize, scale: f32, palette: Palette) -> AnyElement {
-    let badge = div()
-        .absolute()
-        .right(px(-5.0))
-        .bottom(px(-4.0))
-        .min_w(px(16.0))
-        .h(px(16.0))
-        .px(px(4.0))
-        .rounded_full()
-        .bg(gpui_kit::hsla(0.0, 0.0, 0.1, 0.9))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(9.0))
-        .font_weight(FontWeight::BOLD)
-        .text_color(gpui_kit::white())
-        .child(if count > 99 {
-            "99+".into()
-        } else {
-            count.to_string()
-        });
-    // A new copy makes the badge pop.
-    let badge = badge.with_animation(
-        SharedString::from(format!("badge:{count}")),
-        Animation::new(Duration::from_millis(420)),
-        |badge, t| {
-            let pop = 1.0 + 0.45 * (1.0 - motion::sample(motion::ICON_IN.curve, t));
-            badge
-                .min_w(px(16.0 * pop))
-                .h(px(16.0 * pop))
-                .text_size(px(9.0 * pop))
-        },
-    );
-    div()
-        .relative()
-        .size(px(TILE * scale))
-        .rounded(px(9.0 * scale))
-        .bg(gpui_kit::linear_gradient(
-            180.0,
-            gpui_kit::linear_color_stop(palette.purple, 0.0),
-            gpui_kit::linear_color_stop(palette.purple_deep, 1.0),
-        ))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(icon(
-            IconName::Clipboard.path(),
-            19.0 * scale,
-            gpui_kit::white(),
-        ))
-        .children((count > 0).then_some(badge))
-        .into_any_element()
-}
-
 // MARK: Card
 
 /// Where the card window currently sits, shared by the native side (which
@@ -894,42 +713,8 @@ impl CardView {
     }
 }
 
-/// Stats readings as currently drawn, easing toward the latest sample.
-struct Readings {
-    cpu: f32,
-    cpu_fraction: f32,
-    memory_fraction: f32,
-    disk_fraction: f32,
-}
-
-impl CardView {
-    fn sample_readings(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Readings> {
-        let stats = self.dock.read(cx).stats.clone()?;
-        let gauge = || Spring::new(Duration::from_millis(520)).with_damping(0.78);
-        Some(Readings {
-            cpu: transition("card:cpu", stats.cpu, number_tween(), window, cx),
-            cpu_fraction: spring("gauge:cpu", stats.cpu / 100.0, gauge(), window, cx),
-            memory_fraction: spring(
-                "gauge:memory",
-                stats.memory_percent() / 100.0,
-                gauge(),
-                window,
-                cx,
-            ),
-            disk_fraction: spring(
-                "gauge:disk",
-                stats.disk_percent() / 100.0,
-                gauge(),
-                window,
-                cx,
-            ),
-        })
-    }
-}
-
 impl Render for CardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let readings = self.sample_readings(window, cx);
         let animate = !cx.reduce_motion();
         let palette = Palette::new(window, self.dock.read(cx).accessibility);
         // Plugin cards draw with the window, which the dock borrow below
@@ -945,9 +730,6 @@ impl Render for CardView {
                     dock.shortcut_for(&item.id).map(ToString::to_string),
                     palette,
                 ),
-                ItemKind::Weather => weather_card(dock, palette),
-                ItemKind::Stats => stats_card(dock, readings.as_ref(), palette),
-                ItemKind::Clipboard => clipboard_card(&self.dock, dock, animate, palette),
                 ItemKind::Plugin(_) => plugin_card
                     .take()
                     .unwrap_or_else(|| div().into_any_element()),
@@ -1081,29 +863,6 @@ pub(crate) fn title(label: impl Into<SharedString>) -> Div {
         .child(label.into())
 }
 
-fn footer(left: impl IntoElement, right: impl IntoElement, palette: Palette) -> Div {
-    div()
-        .mt_auto()
-        .pt(px(8.0))
-        .border_t_1()
-        .border_color(palette.separator)
-        .flex()
-        .items_center()
-        .justify_between()
-        .text_size(px(text::SUBHEADLINE))
-        .text_color(palette.tertiary)
-        .child(left)
-        .child(right)
-}
-
-fn updated_label(updated: Instant) -> String {
-    match updated.elapsed().as_secs() / 60 {
-        0 => "Updated just now".into(),
-        1 => "Updated 1 min ago".into(),
-        minutes => format!("Updated {minutes} min ago"),
-    }
-}
-
 fn message_card(heading: &str, message: &str, palette: Palette) -> AnyElement {
     card_body()
         .gap(px(4.0))
@@ -1114,99 +873,6 @@ fn message_card(heading: &str, message: &str, palette: Palette) -> AnyElement {
                 .text_color(palette.secondary)
                 .child(message.to_string()),
         )
-        .into_any_element()
-}
-
-fn weather_card(dock: &Dock, palette: Palette) -> AnyElement {
-    let (weather, updated): (&Weather, Instant) = match &dock.weather {
-        WeatherState::Ready { weather, updated } => (weather, *updated),
-        WeatherState::Loading => {
-            return message_card(&dock.location.name, "Loading weather…", palette);
-        }
-        WeatherState::Failed(message) => {
-            return message_card(&dock.location.name, message, palette);
-        }
-    };
-
-    let header = div()
-        .flex()
-        .items_start()
-        .justify_between()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(title(dock.location.name.clone()))
-                .child(
-                    div()
-                        .text_size(px(text::CALLOUT))
-                        .text_color(palette.secondary)
-                        .child(weather.condition.label()),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .child(icon(
-                    condition_icon(weather.condition, weather.is_day),
-                    24.0,
-                    palette.label,
-                ))
-                .child(
-                    div()
-                        .text_size(px(text::DISPLAY))
-                        .font_weight(FontWeight::LIGHT)
-                        .child(degrees(weather.temperature)),
-                ),
-        );
-
-    let range = div()
-        .mt(px(2.0))
-        .text_size(px(text::CALLOUT))
-        .text_color(palette.secondary)
-        .child(format!(
-            "High {}, low {}",
-            degrees(weather.high),
-            degrees(weather.low)
-        ));
-
-    let hours = div()
-        .mt(px(10.0))
-        .flex()
-        .justify_between()
-        .children(weather.hours.iter().map(|hour| {
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(5.0))
-                .w(px(36.0))
-                .child(
-                    div()
-                        .text_size(px(text::SUBHEADLINE))
-                        .text_color(palette.secondary)
-                        .child(format!("{:02}", hour.hour)),
-                )
-                .child(icon(
-                    condition_icon(hour.condition, (6..20).contains(&hour.hour)),
-                    15.0,
-                    palette.label,
-                ))
-                .child(
-                    div()
-                        .text_size(px(text::CALLOUT))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(degrees(hour.temperature)),
-                )
-        }));
-
-    card_body()
-        .child(header)
-        .child(range)
-        .child(hours)
-        .child(footer(updated_label(updated), "Open-Meteo", palette))
         .into_any_element()
 }
 
@@ -1258,248 +924,4 @@ pub(crate) fn meter(
                 ),
         )
         .child(gauge(fraction, color, palette))
-}
-
-fn stats_card(dock: &Dock, readings: Option<&Readings>, palette: Palette) -> AnyElement {
-    let (Some(stats), Some(readings)) = (dock.stats.as_ref(), readings) else {
-        return message_card("System", "Reading your Mac…", palette);
-    };
-    let sparkline =
-        div()
-            .h(px(18.0))
-            .flex()
-            .items_end()
-            .gap(px(2.0))
-            .children(dock.cpu_history.iter().map(|cpu| {
-                div()
-                    .w(px(3.0))
-                    .h(relative((cpu / 100.0).clamp(0.12, 1.0)))
-                    .rounded(px(1.0))
-                    .bg(palette.tertiary)
-            }));
-
-    card_body()
-        .gap(px(10.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(title("System"))
-                .child(sparkline),
-        )
-        .child(meter(
-            Some(IconName::Cpu.path()),
-            "CPU",
-            percent(readings.cpu),
-            readings.cpu_fraction,
-            palette.blue,
-            palette,
-        ))
-        .child(meter(
-            Some(IconName::MemoryStick.path()),
-            "Memory",
-            format!(
-                "{} of {}",
-                format_memory(stats.memory_used),
-                format_memory(stats.memory_total)
-            ),
-            readings.memory_fraction,
-            palette.green,
-            palette,
-        ))
-        .child(meter(
-            Some(IconName::HardDrive.path()),
-            "Storage",
-            format!(
-                "{} free",
-                format_bytes(stats.disk_total.saturating_sub(stats.disk_used))
-            ),
-            readings.disk_fraction,
-            palette.orange,
-            palette,
-        ))
-        .child(
-            div()
-                .text_size(px(text::CAPTION))
-                .text_color(palette.tertiary)
-                .child(format!("Refreshes every {} s", STATS_INTERVAL.as_secs())),
-        )
-        .into_any_element()
-}
-
-fn clipboard_card(
-    dock_entity: &Entity<Dock>,
-    dock: &Dock,
-    animate: bool,
-    palette: Palette,
-) -> AnyElement {
-    let count = dock.history.len();
-    let header = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(title("Clipboard"))
-        .child(
-            div()
-                .text_size(px(text::CALLOUT))
-                .text_color(palette.secondary)
-                .child(format!("{count} copied")),
-        );
-
-    if count == 0 {
-        return card_body()
-            .gap(px(4.0))
-            .child(header)
-            .child(
-                div()
-                    .text_size(px(text::CALLOUT))
-                    .text_color(palette.secondary)
-                    .child("Text, links, images and files you copy will appear here."),
-            )
-            .into_any_element();
-    }
-
-    let now = clipboard::now_secs();
-    let rows = dock
-        .history
-        .entries
-        .iter()
-        .take(CLIPBOARD_ROWS)
-        .enumerate()
-        .map(|(index, entry)| {
-            let row = clip_row(dock_entity, entry, now, palette);
-            if !animate {
-                return row;
-            }
-            // Rows cascade in as the card opens, and a new copy slides in on top.
-            let delay = motion::ROW_STAGGER.as_secs_f32() * index as f32;
-            let duration = 0.24 + delay;
-            div()
-                .relative()
-                .child(row)
-                .with_animation(
-                    SharedString::from(format!("clip-row:{}", entry.id)),
-                    Animation::new(Duration::from_secs_f32(duration)),
-                    move |row, t| {
-                        let local = ((t * duration - delay) / (duration - delay)).clamp(0.0, 1.0);
-                        let rise = motion::sample(motion::ICON_IN.curve, local);
-                        row.opacity(ease_out(local)).top(px((1.0 - rise) * 4.0))
-                    },
-                )
-                .into_any_element()
-        });
-
-    let clear = dock_entity.clone();
-    let armed = dock.is_clear_armed();
-    let clear_button = div()
-        .id("clear-history")
-        .test_support()
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(5.0))
-        .text_color(if armed { palette.red } else { palette.blue })
-        .hover(|style| style.bg(palette.fill))
-        .on_click(move |_, _, cx: &mut App| {
-            clear.update(cx, |dock, cx| dock.request_clear_history(cx));
-        })
-        .child(if armed {
-            "Click Again to Clear"
-        } else {
-            "Clear History"
-        });
-
-    let show = dock_entity.clone();
-    let show_all = div()
-        .id("show-all-history")
-        .test_support()
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(5.0))
-        .text_color(palette.blue)
-        .hover(|style| style.bg(palette.fill))
-        .on_click(move |_, _, cx: &mut App| {
-            show.update(cx, |dock, cx| dock.show_clipboard_history(cx));
-        })
-        .child("Show All");
-
-    card_body()
-        .px(px(8.0))
-        .gap(px(4.0))
-        .child(div().px(px(6.0)).child(header))
-        .child(div().flex().flex_col().children(rows))
-        .child(
-            div()
-                .px(px(6.0))
-                .mt_auto()
-                .child(footer(show_all, clear_button, palette)),
-        )
-        .into_any_element()
-}
-
-fn clip_row(
-    dock_entity: &Entity<Dock>,
-    entry: &ClipEntry,
-    now: u64,
-    palette: Palette,
-) -> AnyElement {
-    let leading = match &entry.kind {
-        ClipKind::Image { path, .. } => img(path.clone())
-            .size(px(28.0))
-            .rounded(px(6.0))
-            .object_fit(ObjectFit::Cover)
-            .into_any_element(),
-        kind => {
-            let glyph = match kind {
-                ClipKind::Link { .. } => IconName::Link,
-                ClipKind::File { .. } => IconName::File,
-                _ => IconName::FileText,
-            };
-            div()
-                .size(px(28.0))
-                .flex_shrink_0()
-                .rounded(px(6.0))
-                .bg(palette.fill)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(icon(glyph.path(), 14.0, palette.secondary))
-                .into_any_element()
-        }
-    };
-    let detail = match &entry.source {
-        Some(source) => format!("{} · {source}", entry.age_label(now)),
-        None => entry.age_label(now),
-    };
-    let copy = dock_entity.clone();
-    let id = entry.id;
-    div()
-        .id(("clip", entry.id))
-        .test_support()
-        .h(px(CLIP_ROW as f32))
-        .flex()
-        .items_center()
-        .gap(px(10.0))
-        .px(px(6.0))
-        .rounded(px(8.0))
-        .hover(|style| style.bg(palette.fill))
-        .active(|style| style.opacity(0.7))
-        .on_click(move |_, _, cx: &mut App| {
-            copy.update(cx, |dock, cx| dock.copy_entry(id, cx));
-        })
-        .child(leading)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(single_line(div().text_size(px(text::BODY))).child(entry.kind.title()))
-                .child(
-                    single_line(div().text_size(px(text::SUBHEADLINE)))
-                        .text_color(palette.secondary)
-                        .child(detail),
-                ),
-        )
-        .into_any_element()
 }

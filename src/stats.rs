@@ -63,10 +63,14 @@ impl Sampler {
         }
         self.history.push_back(cpu);
 
-        let startup = self
-            .disks
-            .iter()
-            .find(|disk| disk.mount_point() == std::path::Path::new("/"));
+        #[cfg(target_os = "windows")]
+        let root = std::path::PathBuf::from(format!(
+            "{}\\",
+            std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into())
+        ));
+        #[cfg(not(target_os = "windows"))]
+        let root = std::path::PathBuf::from("/");
+        let startup = self.disks.iter().find(|disk| disk.mount_point() == root);
         let (disk_total, disk_free) =
             startup.map_or((0, 0), |disk| (disk.total_space(), disk.available_space()));
 

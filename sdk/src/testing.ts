@@ -217,6 +217,9 @@ export function mount(definition: PluginDefinition<any>, options: MountOptions =
     action: (key: string) => deliver({ type: "action", key }),
     /** Opens or closes the card. */
     setCardOpen: (open: boolean) => deliver({ type: "card", open }),
+    /** Delivers a native service update through the production bridge. */
+    setData: <K extends import("./data").DataSource>(source: K, value: import("./data").NativeData[K]) =>
+      deliver({ type: "data", source, value }),
     /** Changes settings as Settings › Plugins would. */
     setSettings: (values: Record<string, unknown>) => deliver({ type: "settings", values }),
     /** Waits for re-renders and effects, e.g. after a timer fires. */

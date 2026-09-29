@@ -12,11 +12,11 @@ use crate::{
     views,
 };
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, DefiniteLength, ElementId, Entity, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, Subscription, TestSupportExt as _,
-    Window, auto,
-    base::{Spring, Transition, spring, transition},
+    Animation, AnimationExt as _, AnyElement, App, AppContext as _, Context, DefiniteLength,
+    ElementId, Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement, Length, ObjectFit,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled, StyledImage as _,
+    Subscription, TestSupportExt as _, Window, auto,
+    base::{Easing, Spring, Transition, spring, transition},
     component::{
         Disableable as _, Sizable as _,
         chart::{AreaChart, BarChart, LineChart},
@@ -41,6 +41,49 @@ pub struct Surface {
 }
 
 impl Surface {
+    /// Only explicitly marked sizes magnify, so badges keep their native size.
+    pub fn render_tile(
+        &self,
+        nodes: &[Node],
+        scale: f32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<AnyElement> {
+        fn scaled(node: &Node, scale: f32) -> Node {
+            match node {
+                Node::Text(_) => node.clone(),
+                Node::Element {
+                    kind,
+                    props,
+                    children,
+                } => {
+                    let mut props = props.clone();
+                    if flag(&props, "magnify") {
+                        for key in ANIMATABLE.iter().copied().chain(["icon_size"]) {
+                            if let Some(value) = number(&props, key) {
+                                props.insert(key.into(), Value::from(value * scale));
+                            }
+                        }
+                    }
+                    Node::Element {
+                        kind: kind.clone(),
+                        props,
+                        children: children.iter().map(|node| scaled(node, scale)).collect(),
+                    }
+                }
+            }
+        }
+        self.render(
+            &nodes
+                .iter()
+                .map(|node| scaled(node, scale))
+                .collect::<Vec<_>>(),
+            "tile",
+            window,
+            cx,
+        )
+    }
+
     /// Draws `nodes`; `root` names the surface, e.g. `"card"`.
     pub fn render(
         &self,
@@ -49,11 +92,26 @@ impl Surface {
         window: &mut Window,
         cx: &mut App,
     ) -> Vec<AnyElement> {
-        nodes
-            .iter()
-            .enumerate()
-            .map(|(index, node)| self.node(node, &format!("{root}/{index}"), window, cx))
-            .collect()
+        // JSX splits `Refreshes every {interval} s` into adjacent text nodes.
+        // GPUI lays out each text element as a separate child, so join those
+        // fragments before drawing. Keep original indices for element identities
+        // and leave the protocol tree untouched so patches still address it.
+        let mut elements = Vec::new();
+        let mut text = String::new();
+        for (index, node) in nodes.iter().enumerate() {
+            if let Node::Text(fragment) = node {
+                text.push_str(fragment);
+            } else {
+                if !text.is_empty() {
+                    elements.push(std::mem::take(&mut text).into_any_element());
+                }
+                elements.push(self.node(node, &format!("{root}/{index}"), window, cx));
+            }
+        }
+        if !text.is_empty() {
+            elements.push(text.into_any_element());
+        }
+        elements
     }
 
     fn node(&self, node: &Node, path: &str, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -131,9 +189,15 @@ impl Surface {
                 )
                 .into_any_element()
             }
-            "Title" => {
-                style(views::title("").children(children), props, palette).into_any_element()
-            }
+            "Title" => style(
+                div()
+                    .text_size(px(text::TITLE3))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .children(children),
+                props,
+                palette,
+            )
+            .into_any_element(),
             "Text" => {
                 let (size, weight) = match string(props, "variant") {
                     Some("callout") => (text::CALLOUT, FontWeight::NORMAL),
@@ -192,19 +256,72 @@ impl Surface {
                 style(div().flex_shrink_0().child(switch), props, palette).into_any_element()
             }
             "Segmented" => self.segmented(props, path),
-            "Meter" => style(
-                div().child(views::meter(
-                    string(props, "icon").map(|name| icon_path(name).into()),
-                    string(props, "label").unwrap_or_default().to_string(),
-                    string(props, "value").unwrap_or_default().to_string(),
-                    number(props, "fraction").unwrap_or(0.0),
-                    color(props.get("color"), palette).unwrap_or(palette.blue),
+            "NumberText" => {
+                let target = number(props, "value").unwrap_or(0.0);
+                let duration = number(props, "duration")
+                    .unwrap_or(700.0)
+                    .clamp(0.0, 5000.0);
+                let value = transition(
+                    SharedString::from(format!("{}:value", self.key(props, path))),
+                    target,
+                    Transition::new(Duration::from_millis(duration as u64)).easing(Easing::EaseOut),
+                    window,
+                    cx,
+                );
+                let suffix = string(props, "suffix").unwrap_or_default();
+                style(
+                    div().child(format!("{:.0}{suffix}", value.round())),
+                    props,
                     palette,
-                )),
-                props,
-                palette,
-            )
-            .into_any_element(),
+                )
+                .into_any_element()
+            }
+            "Meter" => {
+                let mut fraction = number(props, "fraction").unwrap_or(0.0);
+                let mut value = number(props, "value_number");
+                if flag(props, "animated") {
+                    let key = self.key(props, path);
+                    fraction = spring(
+                        SharedString::from(format!("{key}:fraction")),
+                        fraction,
+                        Spring::new(Duration::from_millis(520)).with_damping(0.78),
+                        window,
+                        cx,
+                    );
+                    value = value.map(|value| {
+                        transition(
+                            SharedString::from(format!("{key}:value")),
+                            value,
+                            Transition::new(Duration::from_millis(700)).easing(Easing::EaseOut),
+                            window,
+                            cx,
+                        )
+                    });
+                }
+                let label = value.map_or_else(
+                    || string(props, "value").unwrap_or_default().to_string(),
+                    |value| {
+                        format!(
+                            "{:.0}{}",
+                            value.round(),
+                            string(props, "value_suffix").unwrap_or_default()
+                        )
+                    },
+                );
+                style(
+                    div().child(views::meter(
+                        string(props, "icon").map(|name| icon_path(name).into()),
+                        string(props, "label").unwrap_or_default().to_string(),
+                        label,
+                        fraction,
+                        color(props.get("color"), palette).unwrap_or(palette.blue),
+                        palette,
+                    )),
+                    props,
+                    palette,
+                )
+                .into_any_element()
+            }
             "ListRow" => self.list_row(props, path),
             "Sparkline" => {
                 let bar = color(props.get("color"), palette).unwrap_or(palette.tertiary);
@@ -434,12 +551,14 @@ impl Surface {
             && active_style.is_none()
             && !scroll_y
             && !scroll_x
+            && !props.contains_key("enter")
         {
             return base.into_any_element();
         }
         let (dock, plugin) = (self.dock.clone(), self.plugin.clone());
         let (hover_dock, hover_plugin) = (dock.clone(), plugin.clone());
-        base.id(self.id(props, path))
+        let element = base
+            .id(self.id(props, path))
             .test_support()
             .when(scroll_y, |el| el.overflow_y_scroll())
             .when(scroll_x, |el| el.overflow_x_scroll())
@@ -462,8 +581,44 @@ impl Surface {
                         cx,
                     )
                 })
-            })
-            .into_any_element()
+            });
+        if let Some(enter) = props.get("enter").and_then(Value::as_object) {
+            let pop = string(enter, "kind") == Some("pop");
+            let duration = number(enter, "duration")
+                .unwrap_or(240.0)
+                .clamp(1.0, 5000.0)
+                / 1000.0;
+            let delay = number(enter, "delay").unwrap_or(0.0).clamp(0.0, 5000.0) / 1000.0;
+            let total = duration + delay;
+            let (width, height, text_size) = (
+                number(props, "min_w").unwrap_or(16.0),
+                number(props, "h").unwrap_or(16.0),
+                number(props, "text_size").unwrap_or(9.0),
+            );
+            return element
+                .with_animation(
+                    SharedString::from(format!("{}:enter", self.key(props, path))),
+                    Animation::new(Duration::from_secs_f32(total)),
+                    move |element, t| {
+                        let t = ((t * total - delay) / duration).clamp(0.0, 1.0);
+                        let rise = crate::motion::sample(crate::motion::ICON_IN.curve, t);
+                        if pop {
+                            let scale = 1.0 + 0.45 * (1.0 - rise);
+                            element
+                                .min_w(px(width * scale))
+                                .h(px(height * scale))
+                                .text_size(px(text_size * scale))
+                        } else {
+                            element
+                                .relative()
+                                .opacity(1.0 - (1.0 - t).powi(3))
+                                .top(px((1.0 - rise) * 4.0))
+                        }
+                    },
+                )
+                .into_any_element();
+        }
+        element.into_any_element()
     }
 
     fn button(&self, props: &Props, path: &str, children: Vec<AnyElement>) -> AnyElement {
@@ -841,6 +996,7 @@ fn color(value: Option<&Value>, palette: Palette) -> Option<Hsla> {
         "orange" => palette.orange,
         "red" => palette.red,
         "purple" => palette.purple,
+        "purple_deep" => palette.purple_deep,
         "transparent" => gpui_kit::transparent_black(),
         hex => return parse_hex(hex),
     })
@@ -989,6 +1145,22 @@ fn apply<S: Styled>(el: S, name: &str, value: &Value, palette: Palette) -> S {
     lengths!(size, w, h, min_w, min_h, max_w, max_h);
     insets!(top, right, bottom, left);
     match name {
+        "bg_gradient" => {
+            let Some(gradient) = value.as_object() else {
+                return el;
+            };
+            let (Some(from), Some(to)) = (
+                color(gradient.get("from"), palette),
+                color(gradient.get("to"), palette),
+            ) else {
+                return el;
+            };
+            el.bg(gpui_kit::linear_gradient(
+                number(gradient, "angle").unwrap_or(180.0),
+                gpui_kit::linear_color_stop(from, 0.0),
+                gpui_kit::linear_color_stop(to, 1.0),
+            ))
+        }
         "bg" => match color(Some(value), palette) {
             Some(color) => el.bg(color),
             None => el,

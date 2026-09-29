@@ -39,6 +39,7 @@ pub const CARD_MOVE: Motion = motion(170, 0.25, 0.8, 0.25, 1.0);
 /// The scale a card grows from as it appears, like an `NSPopover`.
 pub const POPOVER_SCALE: f64 = 0.86;
 /// The scale a card shrinks to as it leaves.
+#[cfg(target_os = "macos")]
 pub const POPOVER_EXIT_SCALE: f64 = 0.95;
 /// A card leaving.
 pub const CARD_OUT: Motion = motion(140, 0.4, 0.0, 1.0, 1.0);
@@ -52,9 +53,6 @@ pub const ICON_TRAVEL: f32 = 16.0;
 pub const ICON_STAGGER: Duration = Duration::from_millis(24);
 /// Each icon's own arrival.
 pub const ICON_IN: Motion = motion(460, 0.2, 1.3, 0.3, 1.0);
-/// Delay between clipboard rows as a card opens.
-pub const ROW_STAGGER: Duration = Duration::from_millis(15);
-
 /// Largest extra scale under the pointer, as a fraction (0.14 → 114%).
 pub const MAGNIFY: f32 = 0.14;
 /// How far magnification reaches, in slots.

@@ -1,7 +1,8 @@
 # @sidedoor/sdk
 
 Write Sidedoor widgets in TSX. Each plugin runs under [Bun](https://bun.sh)
-in its own process. The app draws what it renders with real GPUI elements, so
+in its own Worker inside one shared supervisor. The app draws what it renders
+with real GPUI elements, so
 there's no web view. Element and style names are GPUI's own, so markup moves
 into the Rust UI with almost no changes:
 
@@ -320,3 +321,48 @@ The app sends `event` (a handler key and a value), `card` (whether the card
 is open), `window` (a key, and whether it opened or closed), `click`,
 `action` (a key from `actions`), `settings`, and `resync` if a patch
 doesn't fit its copy of the tree.
+
+## Built-in plugins and native data
+
+Weather, Stats, and Clipboard are ordinary `definePlugin` plugins in
+`src/builtins/`. They ship with Sidedoor and run in the same supervisor as user
+plugins. The app bundles Bun, so an installed app does not need a separate Bun
+installation. Existing widget entries and their shortcuts migrate automatically.
+
+Plugins can subscribe to the native services with `data` and read the current
+value with `useData`. A value is `null` until the first update; updates rerender
+the plugin automatically. Only changed values are sent.
+
+```tsx
+import { Card, Text, definePlugin, useData } from "@sidedoor/sdk";
+
+export default definePlugin({
+  name: "CPU",
+  data: ["stats"],
+  card: () => {
+    const stats = useData("stats");
+    return <Card><Text>{stats ? `${Math.round(stats.cpu)}%` : "Loading…"}</Text></Card>;
+  },
+});
+```
+
+- `weather`: the location selected in Sidedoor, loading/failure state, conditions,
+  and hourly forecast.
+- `stats`: CPU and memory percentages, storage usage, formatted capacities, and
+  CPU history. Rust samples these every two seconds.
+- `clipboard`: the total count, five latest entries, and clear-confirmation state.
+  Declaring this feed also enables `sidedoor.clipboard.copyEntry(id)`,
+  `showHistory()`, and `requestClear()`. Clearing retains the native two-click
+  confirmation. The full searchable history window remains native.
+
+`NumberText` eases numeric labels on the native animation clock. `Meter` accepts
+`animated`, `value_number`, and `value_suffix` for the same stats animations.
+Tile nodes can opt into hover scaling with `magnify`; `div` supports
+`enter={{ kind: "rise", duration: 240, delay: 15 }}` (or `kind: "pop"`), and
+`bg_gradient={{ from: "purple", to: "purple_deep", angle: 180 }}`. Native motion
+respects Reduce Motion.
+
+For development, run `bun install --frozen-lockfile`, `bun run check`, and
+`bun test` from `sdk/`, then `cargo test --locked` from the repository root.
+The Rust UI tests use Bun to render the actual built-in TSX against fake native
+services. `scripts/bundle.sh` packages the runtime and compiles the built-ins.
