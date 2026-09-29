@@ -7,6 +7,7 @@ use crate::{
     config::Appearance,
     geometry::{Point, Rect, Screen},
 };
+use std::os::windows::ffi::OsStrExt as _;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -315,6 +316,32 @@ impl Platform for WindowsPlatform {
             .spawn()
         {
             eprintln!("sidedoor: couldn't reveal file: {error}");
+        }
+    }
+
+    fn trash(&self, path: &Path) -> io::Result<()> {
+        use windows_sys::Win32::UI::Shell::{
+            FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+            SHFILEOPSTRUCTW, SHFileOperationW,
+        };
+        // The source list ends with two NULs.
+        let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+        from.extend([0, 0]);
+        let mut operation = SHFILEOPSTRUCTW {
+            wFunc: FO_DELETE,
+            pFrom: from.as_ptr(),
+            fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16,
+            ..Default::default()
+        };
+        // SAFETY: `from` outlives the call and is double-NUL terminated.
+        match unsafe { SHFileOperationW(&mut operation) } {
+            0 if operation.fAnyOperationsAborted == 0 => Ok(()),
+            0 => Err(io::Error::other(
+                "the move to the Recycle Bin was cancelled",
+            )),
+            code => Err(io::Error::other(format!(
+                "the Recycle Bin refused it (error {code})"
+            ))),
         }
     }
 

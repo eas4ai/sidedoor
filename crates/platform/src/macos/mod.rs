@@ -30,8 +30,8 @@ use objc2_app_kit::{
     NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString, NSTimeZone, NSURL,
-    NSValue,
+    NSArray, NSBundle, NSData, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString,
+    NSTimeZone, NSURL, NSValue,
 };
 use objc2_quartz_core::{
     CABasicAnimation, CAMediaTiming as _, CAMediaTimingFunction, CAShapeLayer, CATransaction,
@@ -131,6 +131,13 @@ impl Platform for MacPlatform {
         let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
         let urls = NSArray::from_retained_slice(&[url]);
         NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&urls);
+    }
+
+    fn trash(&self, path: &Path) -> std::io::Result<()> {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        NSFileManager::defaultManager()
+            .trashItemAtURL_resultingItemURL_error(&url, None)
+            .map_err(|err| std::io::Error::other(err.localizedDescription().to_string()))
     }
 
     fn pasteboard_change_count(&self) -> isize {

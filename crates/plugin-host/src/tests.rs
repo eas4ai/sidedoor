@@ -151,6 +151,13 @@ fn plugins_are_found_by_their_definition_without_running_them() {
     .unwrap();
     fs::create_dir_all(dir.join("not-a-plugin")).unwrap();
     fs::write(dir.join("not-a-plugin/index.ts"), "console.log(1)").unwrap();
+    // The SDK names definePlugin without calling it.
+    fs::create_dir_all(dir.join("sdk")).unwrap();
+    fs::write(
+        dir.join("sdk/index.ts"),
+        "export { definePlugin, sidedoor } from \"./host\";\nexport function definePlugin(d) {}",
+    )
+    .unwrap();
 
     let found = discover(&dir);
     fs::remove_dir_all(&dir).ok();
@@ -190,6 +197,7 @@ fn the_running_plugin_describes_itself() {
         data: Vec::new(),
         dir: PathBuf::from("/plugins/pomodoro"),
         main: PathBuf::from("index.tsx"),
+        source: None,
     };
     manifest.update(described);
     assert_eq!(manifest.name, "Pomodoro");

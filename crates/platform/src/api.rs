@@ -72,6 +72,8 @@ pub trait Platform {
     fn app_at(&self, path: &Path) -> Option<AppInfo>;
     fn open(&self, path: &Path) -> io::Result<()>;
     fn reveal_in_finder(&self, path: &Path);
+    /// Moves a file or folder to the Trash (the Recycle Bin on Windows).
+    fn trash(&self, path: &Path) -> io::Result<()>;
 
     /// Increments whenever anything is copied.
     fn pasteboard_change_count(&self) -> isize;

@@ -1,4 +1,4 @@
-use crate::protocol::DataSource;
+use crate::{install::Source, protocol::DataSource};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::{
@@ -28,6 +28,8 @@ pub struct Manifest {
     pub dir: PathBuf,
     /// The entry file, relative to `dir`.
     pub main: PathBuf,
+    /// Where it was installed from, for plugins installed from GitHub.
+    pub source: Option<Source>,
 }
 
 /// One setting a plugin declares, shown in Settings › Plugins.
@@ -148,7 +150,7 @@ impl Manifest {
             .map(PathBuf::from)
             .find(|entry| dir.join(entry).is_file())?;
         let source = fs::read_to_string(dir.join(&main)).ok()?;
-        if !source.contains("definePlugin") {
+        if !calls_define_plugin(&source) {
             return None;
         }
         let id = dir.file_name()?.to_string_lossy().into_owned();
@@ -163,6 +165,7 @@ impl Manifest {
             actions: Vec::new(),
             windows: Vec::new(),
             data: Vec::new(),
+            source: Source::read(dir),
             dir: dir.to_path_buf(),
             main,
         })
@@ -208,6 +211,16 @@ impl Manifest {
         }
         values
     }
+}
+
+/// Whether `source` calls `definePlugin(…)`, rather than only naming it the
+/// way the SDK's own index re-exports it.
+fn calls_define_plugin(source: &str) -> bool {
+    source.match_indices("definePlugin").any(|(at, name)| {
+        let before = source[..at].trim_end();
+        let after = source[at + name.len()..].trim_start();
+        !before.ends_with("function") && (after.starts_with('(') || after.starts_with('<'))
+    })
 }
 
 /// The tallest card a plugin gets, fitted or fixed.

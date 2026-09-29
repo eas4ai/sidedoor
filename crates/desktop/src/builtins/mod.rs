@@ -42,6 +42,7 @@ pub fn manifests() -> Vec<Manifest> {
             "index.tsx"
         }
         .into(),
+        source: None,
     })
     .collect()
 }

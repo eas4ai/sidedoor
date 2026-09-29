@@ -3,7 +3,7 @@
 
 use ::platform::Platform as _;
 
-use crate::app::dock::{Dock, Services};
+use crate::app::dock::{Dock, InstallState, Services, UpdateState};
 use crate::app::host::{Host, LoginItem, fake::FakePlatform};
 use crate::ui::clipboard::{ClipboardWindow, ClipboardWindowEvent};
 use crate::ui::dock::{CardChrome, CardView, DockView};
@@ -13,8 +13,8 @@ use domain::config::{Appearance, Config, ItemConfig};
 use domain::geometry::{self, Edge, Point};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, InputEvent as _, Modifiers,
-    MouseMoveEvent, TestAppContext, Window, WindowBounds, WindowOptions, point, px, size,
-    test::TestWindowExt as _,
+    MouseMoveEvent, SharedString, TestAppContext, Window, WindowBounds, WindowOptions, point, px,
+    size, test::TestWindowExt as _,
 };
 use plugin_host::{HostMessage, PluginMessage};
 use services::weather::Place;
@@ -825,11 +825,39 @@ fn open_settings(cx: &mut TestAppContext, items: Vec<ItemConfig>) -> SettingsHar
     }
 }
 
+/// Scrolls the settings page until `id` is on screen, as a user would.
+fn scroll_into_view(window: &mut Window, id: &gpui_kit::ElementId, cx: &mut App) {
+    for _ in 0..40 {
+        let Some(target) = window.try_find(id.clone()) else {
+            return;
+        };
+        let page = window.find("settings-page");
+        let bounds = target.bounds();
+        let inside =
+            bounds.top() >= page.bounds().top() && bounds.bottom() <= page.bounds().bottom();
+        if target.visible() && inside {
+            return;
+        }
+        let step = if target.bounds().top() > page.bounds().top() {
+            -80.0
+        } else {
+            80.0
+        };
+        window.scroll(
+            "settings-page",
+            gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(step))),
+            cx,
+        );
+        window.render_frame(cx);
+    }
+}
+
 impl SettingsHarness {
     fn click(&self, cx: &mut TestAppContext, id: impl Into<gpui_kit::ElementId>) {
         let id = id.into();
         cx.update_window(self.window, |_, window, cx| {
             window.render_frame(cx);
+            scroll_into_view(window, &id, cx);
             window.click(id, cx);
         })
         .unwrap();
@@ -885,7 +913,7 @@ fn settings_tabs_switch_by_click_and_command_number(cx: &mut TestAppContext) {
 fn builtins_can_be_added_from_plugins_and_removed_like_other_items(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![]);
     h.press(cx, "cmd-4");
-    h.click(cx, "install-plugin:builtin.clipboard");
+    h.click(cx, "plugin-dock:builtin.clipboard");
     cx.run_until_parked();
     assert_eq!(h.item_ids(cx), ["plugin:builtin.clipboard"]);
     cx.update(|cx| {
@@ -1515,6 +1543,7 @@ fn plugin_settings_save_and_reach_the_plugin(cx: &mut TestAppContext) {
         serde_json::Value::from("clicks")
     );
     h.press(cx, "cmd-4");
+    h.click(cx, "plugin-row:counter");
     h.click(cx, "plugin-field:counter:unit");
     h.press(cx, "cmd-a");
     cx.update_window(h.window, |_, window, cx| window.input("steps", cx))
@@ -1568,6 +1597,7 @@ fn the_plugins_tab_creates_plugins_and_shows_logs(cx: &mut TestAppContext) {
     assert_eq!(logs(cx), Some(vec!["hello from counter".to_string()]));
 
     h.press(cx, "cmd-4");
+    h.click(cx, "plugin-row:counter");
     h.click(cx, "clear-logs:counter");
     assert_eq!(logs(cx), Some(Vec::new()));
 
@@ -1576,6 +1606,187 @@ fn the_plugins_tab_creates_plugins_and_shows_logs(cx: &mut TestAppContext) {
         .unwrap();
     h.click(cx, "create-plugin");
     assert_eq!(h.item_ids(cx), ["plugin:counter", "plugin:notes"]);
+}
+
+impl SettingsHarness {
+    fn type_into(&self, cx: &mut TestAppContext, field: &str, text: &str) {
+        self.click(cx, SharedString::from(field.to_string()));
+        self.press(cx, "cmd-a");
+        cx.update_window(self.window, |_, window, cx| window.input(text, cx))
+            .unwrap();
+    }
+
+    fn installed(&self, cx: &mut TestAppContext) -> Vec<String> {
+        cx.update(|cx| {
+            self.dock
+                .read(cx)
+                .installed_plugins()
+                .into_iter()
+                .map(|manifest| manifest.id)
+                .collect()
+        })
+    }
+}
+
+#[gpui_kit::test]
+fn plugins_install_from_github_after_asking(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![]);
+    let commit = "a".repeat(40);
+    h.platform
+        .installer
+        .publish("lasse/notes", "Notes", &commit);
+    h.press(cx, "cmd-4");
+
+    // A link that isn't GitHub's says so and downloads nothing.
+    h.type_into(cx, "github-url", "https://gitlab.com/lasse/notes");
+    h.click(cx, "install-github");
+    assert!(matches!(
+        cx.update(|cx| h.dock.read(cx).install.clone()),
+        InstallState::Failed(_)
+    ));
+    assert!(h.platform.installer.fetched.lock().unwrap().is_empty());
+
+    // Declining the trust prompt installs nothing.
+    h.type_into(cx, "github-url", "github.com/lasse/notes");
+    h.press(cx, "enter");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| h.dock.read(cx).install.clone()),
+        InstallState::Idle
+    );
+    assert!(!h.installed(cx).contains(&"notes".to_string()));
+
+    h.click(cx, "install-github");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Install");
+    cx.run_until_parked();
+    assert_eq!(h.item_ids(cx), ["plugin:notes"]);
+    let manifest = cx.update(|cx| {
+        h.dock
+            .read(cx)
+            .installed_plugins()
+            .into_iter()
+            .find(|manifest| manifest.id == "notes")
+            .unwrap()
+    });
+    assert_eq!(manifest.source.unwrap().commit, commit);
+    let saved = h.platform.saved_configs.borrow().last().unwrap().clone();
+    assert!(saved.trusted_plugins.contains("notes"));
+
+    // Trusted now: switching it off and on again doesn't ask.
+    h.click(cx, "plugin-dock:notes");
+    assert!(h.item_ids(cx).is_empty());
+    h.click(cx, "plugin-dock:notes");
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(h.item_ids(cx), ["plugin:notes"]);
+}
+
+#[gpui_kit::test]
+fn plugins_from_github_update_to_the_newest_commit(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![]);
+    h.platform
+        .installer
+        .publish("lasse/notes", "Notes", &"a".repeat(40));
+    h.press(cx, "cmd-4");
+    h.type_into(cx, "github-url", "lasse/notes");
+    h.click(cx, "install-github");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Install");
+    cx.run_until_parked();
+
+    // The newly installed plugin is open, so its update button shows.
+    h.click(cx, "update-plugin:notes");
+    cx.run_until_parked();
+    let update =
+        |cx: &mut TestAppContext| cx.update(|cx| h.dock.read(cx).updates.get("notes").cloned());
+    assert_eq!(update(cx), Some(UpdateState::UpToDate));
+    assert_eq!(h.platform.installer.fetched.lock().unwrap().len(), 1);
+
+    *h.platform.installer.commit.lock().unwrap() = "b".repeat(40);
+    let starts = h.platform.plugin_started.borrow().len();
+    h.click(cx, "update-plugin:notes");
+    cx.run_until_parked();
+    assert_eq!(update(cx), Some(UpdateState::Updated));
+    assert_eq!(h.platform.installer.fetched.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.platform.plugin_started.borrow().len(),
+        starts + 1,
+        "restarted"
+    );
+    let commit = cx.update(|cx| match &h.dock.read(cx).items[0].kind {
+        crate::app::dock::ItemKind::Plugin(manifest) => manifest.source.clone().unwrap().commit,
+        _ => unreachable!(),
+    });
+    assert_eq!(commit, "b".repeat(40));
+}
+
+#[gpui_kit::test]
+fn deleting_a_plugin_trashes_it_and_forgets_its_settings(cx: &mut TestAppContext) {
+    let h = open_settings(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, cx| {
+            let manifest = dock
+                .installed_plugins()
+                .into_iter()
+                .find(|m| m.id == "counter");
+            dock.set_plugin_setting(&manifest.unwrap(), "unit", "steps".into(), cx);
+        })
+    });
+    h.press(cx, "cmd-4");
+    h.click(cx, "plugin-row:counter");
+    h.click(cx, "delete-plugin:counter");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert_eq!(h.item_ids(cx), ["plugin:counter"]);
+
+    h.click(cx, "delete-plugin:counter");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Delete");
+    cx.run_until_parked();
+    assert!(h.item_ids(cx).is_empty());
+    assert_eq!(
+        *h.platform.trashed.borrow(),
+        [PathBuf::from("/plugins/counter")]
+    );
+    assert!(!h.installed(cx).contains(&"counter".to_string()));
+    let saved = h.platform.saved_configs.borrow().last().unwrap().clone();
+    assert!(!saved.plugin_settings.contains_key("counter"));
+    assert!(!saved.trusted_plugins.contains("counter"));
+}
+
+#[gpui_kit::test]
+fn a_plugin_that_never_ran_asks_before_joining_the_dock(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![]);
+    h.press(cx, "cmd-4");
+    // Built-ins are trusted.
+    h.click(cx, "plugin-dock:builtin.stats");
+    assert!(!cx.has_pending_prompt());
+    h.click(cx, "plugin-dock:counter");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Add Plugin");
+    cx.run_until_parked();
+    assert_eq!(h.item_ids(cx), ["plugin:builtin.stats", "plugin:counter"]);
+    // Built-ins can't be deleted; others can be reloaded once in the dock.
+    h.click(cx, "plugin-row:builtin.stats");
+    h.click(cx, "plugin-row:counter");
+    let starts = h.platform.plugin_started.borrow().len();
+    h.click(cx, "reload-plugin:counter");
+    assert_eq!(h.platform.plugin_started.borrow().len(), starts + 1);
+    cx.update_window(h.window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("delete-plugin:builtin.stats").is_none());
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]

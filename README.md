@@ -17,7 +17,7 @@ SDK remains its own Bun package at the repository root.
 | `domain` | Pure models, config schema and migrations, clipboard rules, geometry, motion |
 | `platform` | macOS/Windows APIs, native windows, clipboard, shortcuts, tray, paths |
 | `services` | Config/history persistence, weather requests, system sampling, image downloads |
-| `plugin-host` | Plugin manifests, protocol, discovery, reload, Bun supervisor, SDK setup |
+| `plugin-host` | Plugin manifests, protocol, discovery, GitHub installs, reload, Bun supervisor, SDK setup |
 
 See [architecture](docs/architecture.md) for dependency boundaries and source layout.
 

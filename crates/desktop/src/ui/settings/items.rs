@@ -24,28 +24,21 @@ impl Render for DraggedRow {
 }
 
 fn item_icon(item: &DockItem, palette: Palette) -> AnyElement {
-    if let ItemKind::App(app) = &item.kind
-        && let Some(path) = &app.icon
-    {
+    let app = match &item.kind {
+        ItemKind::Plugin(manifest) => return plugins::plugin_icon(manifest, palette),
+        ItemKind::App(app) => app,
+    };
+    if let Some(path) = &app.icon {
         return img(path.clone())
             .size(px(24.0))
             .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
-    let fill = match &item.kind {
-        ItemKind::Plugin(manifest) => match manifest.id.as_str() {
-            crate::builtins::WEATHER => palette.blue,
-            crate::builtins::CLIPBOARD => palette.purple,
-            crate::builtins::STATS => palette.green,
-            _ => palette.orange,
-        },
-        ItemKind::App(_) => palette.fill,
-    };
     div()
         .size(px(22.0))
         .m(px(1.0))
         .rounded(px(6.0))
-        .bg(fill)
+        .bg(palette.fill)
         .flex()
         .items_center()
         .justify_center()

@@ -62,10 +62,12 @@ Saving keeps what's on screen: `useState`, `useRef` and `createStore`
 values carry over to the reloaded code, as long as they are plain JSON and
 the component's hooks are in the same order.
 
-Add the plugin to the dock under **Settings › Plugins** or **Settings ›
-Items**. The app asks first, because a plugin runs with the same access as
-the app: your files, the network and other programs. Only add plugins from
-people you trust.
+Add the plugin to the dock with its switch under **Settings › Plugins**, or
+from **Settings › Items**. The first time, the app asks, because a plugin runs
+with the same access as the app: your files, the network and other programs.
+Only add plugins from people you trust. Clicking a plugin's name there shows
+its settings, log and code, and buttons to reload or delete it. Deleting moves
+its folder to the Trash and forgets its settings and saved data.
 
 The app links `@sidedoor/sdk` into the plugin's `node_modules` and adds a
 `tsconfig.json` if the plugin has none, so the plugin has nothing to install.
@@ -78,6 +80,26 @@ The working directory is shared, so find your own files with
 `import.meta.dir` rather than relative paths.
 
 See [`examples/plugins/pomodoro`](examples/plugins/pomodoro) for a full widget with a custom dock tile, a setting and a fitted card.
+
+## Sharing a plugin
+
+Push the plugin's folder to a public GitHub repository. Others paste its link
+into **Settings › Plugins › Install from GitHub**:
+
+- `github.com/you/timer` when the plugin is the whole repository.
+- `github.com/you/widgets/tree/main/timer` for one plugin in a repository of
+  several. A link to the repository finds a plugin in its top two levels of
+  folders, and names the choices when there are several.
+
+The app downloads the newest commit, asks whether to trust the plugin, then
+installs it and puts it in the dock. **Check for Updates** under the plugin
+installs a newer commit in place, keeping its dock place, settings and saved
+data. The app writes where a plugin came from to `.sidedoor-source.json` in its
+folder.
+
+A `package.json` with `dependencies` is installed with
+`bun install --production --ignore-scripts`. `@sidedoor/sdk` needn't be listed;
+the app provides it.
 
 ## Surfaces
 

@@ -2,7 +2,7 @@
 
 use crate::geometry::Edge;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Sidekick caps the dock at twelve apps, links and widgets.
 pub const MAX_ITEMS: usize = 12;
@@ -24,6 +24,9 @@ pub struct Config {
     /// Each plugin's settings by plugin id, as changed in Settings › Plugins.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_settings: BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+    /// Plugins the user agreed to run, by id. Built-ins are always trusted.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub trusted_plugins: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -132,6 +135,7 @@ impl Config {
             weather: WeatherLocation::default(),
             shortcuts: default_shortcuts(),
             plugin_settings: BTreeMap::new(),
+            trusted_plugins: BTreeSet::new(),
         }
     }
 

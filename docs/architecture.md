@@ -20,7 +20,7 @@ and build automation. Application sources and assets belong to crates.
 │   ├── domain/src/               # Pure models and state transitions
 │   ├── platform/src/             # Native API contract, paths, macos/ and windows/
 │   ├── services/src/             # Persistence, weather, stats and image IO
-│   └── plugin-host/src/          # Manifest, protocol, discovery, runtime, reload and SDK
+│   └── plugin-host/src/          # Manifest, protocol, discovery, GitHub installs, runtime, reload and SDK
 ├── sdk/                          # Independent Bun/TypeScript package
 ├── scripts/
 │   ├── package/                  # macos.sh and windows.ps1

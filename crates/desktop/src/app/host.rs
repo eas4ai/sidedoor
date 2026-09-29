@@ -6,10 +6,10 @@ use domain::{
     config::{Appearance, Config},
     geometry::{Point, Screen},
 };
-use plugin_host::{Connection, Manifest};
+use plugin_host::{Connection, Installer, Manifest, Staged};
 #[cfg(any(target_os = "macos", test))]
 use std::path::PathBuf;
-use std::{collections::HashSet, io, path::Path};
+use std::{collections::HashSet, io, path::Path, sync::Arc};
 pub trait Host: ::platform::Platform {
     fn save_config(&self, config: &Config) -> io::Result<()>;
     fn save_history(&self, history: &History) -> io::Result<()>;
@@ -20,6 +20,12 @@ pub trait Host: ::platform::Platform {
         settings: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<Connection, String>;
     fn create_plugin(&self, name: &str) -> Result<Manifest, String>;
+    /// Downloads plugins; it runs off the main thread.
+    fn plugin_installer(&self) -> Arc<dyn Installer>;
+    /// Moves a downloaded plugin into the plugins folder.
+    fn install_plugin(&self, staged: Staged) -> Result<Manifest, String>;
+    /// Moves a plugin's folder to the Trash and deletes its saved data.
+    fn delete_plugin(&self, manifest: &Manifest) -> Result<(), String>;
 }
 #[derive(Default)]
 pub struct NativeHost {
@@ -54,6 +60,9 @@ impl ::platform::Platform for NativeHost {
     fn reveal_in_finder(&self, path: &Path) {
         self.native.reveal_in_finder(path)
     }
+    fn trash(&self, path: &Path) -> io::Result<()> {
+        self.native.trash(path)
+    }
     fn pasteboard_change_count(&self) -> isize {
         self.native.pasteboard_change_count()
     }
@@ -77,6 +86,40 @@ impl ::platform::Platform for NativeHost {
     }
 }
 impl Host for NativeHost {
+    fn plugin_installer(&self) -> Arc<dyn Installer> {
+        #[cfg(target_os = "macos")]
+        let bun = bun().cloned();
+        #[cfg(target_os = "windows")]
+        let bun = plugin_host::find_bun();
+        Arc::new(plugin_host::GitHubInstaller {
+            plugins: plugin_host::plugins_dir(),
+            bun,
+        })
+    }
+
+    fn install_plugin(&self, staged: Staged) -> Result<Manifest, String> {
+        let name = staged.manifest.name.clone();
+        plugin_host::install::install(staged, &plugin_host::plugins_dir())
+            .map_err(|err| format!("Couldn't install {name}: {err}"))
+    }
+
+    fn delete_plugin(&self, manifest: &Manifest) -> Result<(), String> {
+        // Only what lives in the plugins folder; never the app's own files.
+        let plugins = plugin_host::plugins_dir();
+        if manifest.dir.parent() != Some(plugins.as_path()) {
+            return Err(format!("{} isn't in the plugins folder.", manifest.name));
+        }
+        ::platform::Platform::trash(self, &manifest.dir)
+            .map_err(|err| format!("Couldn't move {} to the Trash: {err}", manifest.name))?;
+        let data = support_dir().join("plugin-data").join(&manifest.id);
+        if data.exists()
+            && let Err(err) = std::fs::remove_dir_all(&data)
+        {
+            eprintln!("sidedoor: couldn't delete {}: {err}", data.display());
+        }
+        Ok(())
+    }
+
     fn save_config(&self, config: &Config) -> io::Result<()> {
         services::storage::save_config(config)
     }
@@ -94,11 +137,7 @@ impl Host for NativeHost {
         manifest: &plugin_host::Manifest,
         settings: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<plugin_host::Connection, String> {
-        static BUN: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-        let bun = BUN
-            .get_or_init(plugin_host::find_bun)
-            .as_ref()
-            .ok_or("Plugins need Bun. Install it from bun.sh, then reload.")?;
+        let bun = bun().ok_or("Plugins need Bun. Install it from bun.sh, then reload.")?;
         self.plugins
             .start(manifest, settings, bun, &plugin_host::sdk_dir())
             .map_err(|err| format!("Couldn't start {}: {err}", manifest.name))
@@ -133,6 +172,13 @@ impl Host for NativeHost {
         plugin_host::create(&dir, name).map_err(|e| e.to_string())
     }
 }
+/// Bun, looked up once; finding it can mean asking a login shell.
+#[cfg(target_os = "macos")]
+fn bun() -> Option<&'static PathBuf> {
+    static BUN: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    BUN.get_or_init(plugin_host::find_bun).as_ref()
+}
+
 #[cfg(test)]
 pub mod fake {
     //! An in-memory platform for tests.
@@ -241,6 +287,9 @@ pub mod fake {
         /// Lets a test speak as each started plugin.
         pub plugin_inbox: RefCell<HashMap<String, UnboundedSender<PluginMessage>>>,
         pub plugin_sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
+        /// Folders moved to the Trash.
+        pub trashed: RefCell<Vec<PathBuf>>,
+        pub installer: Arc<FakeInstaller>,
         /// The settings each plugin was last started with.
         pub plugin_started: RefCell<Vec<(String, serde_json::Map<String, serde_json::Value>)>>,
     }
@@ -289,6 +338,7 @@ pub mod fake {
                 data: Vec::new(),
                 dir: PathBuf::from("/plugins/counter"),
                 main: PathBuf::from("index.tsx"),
+                source: None,
             }];
             fake
         }
@@ -342,6 +392,10 @@ pub mod fake {
             Ok(())
         }
         fn reveal_in_finder(&self, _: &Path) {}
+        fn trash(&self, path: &Path) -> io::Result<()> {
+            self.trashed.borrow_mut().push(path.to_path_buf());
+            Ok(())
+        }
         fn pasteboard_change_count(&self) -> isize {
             self.pasteboard.borrow().0
         }
@@ -419,9 +473,91 @@ pub mod fake {
                 data: Vec::new(),
                 dir: PathBuf::from(format!("/plugins/{}", name.to_lowercase())),
                 main: PathBuf::from("index.tsx"),
+                source: None,
             };
             self.plugins.borrow_mut().push(manifest.clone());
             Ok(manifest)
+        }
+        fn plugin_installer(&self) -> Arc<dyn Installer> {
+            self.installer.clone()
+        }
+        fn install_plugin(&self, staged: Staged) -> Result<Manifest, String> {
+            let manifest = Manifest {
+                id: staged.id.clone(),
+                dir: PathBuf::from(format!("/plugins/{}", staged.id)),
+                source: Some(staged.source.clone()),
+                ..staged.manifest.clone()
+            };
+            let mut plugins = self.plugins.borrow_mut();
+            plugins.retain(|plugin| plugin.id != manifest.id);
+            plugins.push(manifest.clone());
+            Ok(manifest)
+        }
+        fn delete_plugin(&self, manifest: &Manifest) -> Result<(), String> {
+            ::platform::Platform::trash(self, &manifest.dir).map_err(|err| err.to_string())?;
+            self.plugins
+                .borrow_mut()
+                .retain(|plugin| plugin.id != manifest.id);
+            Ok(())
+        }
+    }
+
+    /// Serves plugins as if from GitHub: each repository by `owner/repo`
+    /// holds one plugin, at the commit in `commit`.
+    #[derive(Default)]
+    pub struct FakeInstaller {
+        pub repos: std::sync::Mutex<HashMap<String, String>>,
+        pub commit: std::sync::Mutex<String>,
+        /// Every download, by label.
+        pub fetched: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeInstaller {
+        pub fn publish(&self, repo: &str, name: &str, commit: &str) {
+            self.repos.lock().unwrap().insert(repo.into(), name.into());
+            *self.commit.lock().unwrap() = commit.into();
+        }
+    }
+
+    impl Installer for FakeInstaller {
+        fn fetch(&self, source: &plugin_host::GitHub) -> Result<Staged, String> {
+            let label = source.label();
+            self.fetched.lock().unwrap().push(label.clone());
+            let name = self
+                .repos
+                .lock()
+                .unwrap()
+                .get(&label)
+                .cloned()
+                .ok_or_else(|| format!("Couldn't find {label} on GitHub."))?;
+            Ok(Staged {
+                manifest: Manifest {
+                    id: source.repo.clone(),
+                    name,
+                    icon: "puzzle".into(),
+                    width: 280.0,
+                    height: None,
+                    settings: Vec::new(),
+                    clickable: false,
+                    actions: Vec::new(),
+                    windows: Vec::new(),
+                    data: Vec::new(),
+                    dir: PathBuf::from(format!("/staging/{}", source.repo)),
+                    main: PathBuf::from("index.tsx"),
+                    source: None,
+                },
+                source: plugin_host::Source {
+                    github: source.clone(),
+                    commit: self.latest_commit(source)?,
+                },
+                id: source.repo.clone(),
+                // Nothing on disk to clean up.
+                root: PathBuf::from("/nonexistent/sidedoor-staging"),
+            })
+        }
+
+        fn latest_commit(&self, _: &plugin_host::GitHub) -> Result<String, String> {
+            Ok(self.commit.lock().unwrap().clone())
         }
     }
 }

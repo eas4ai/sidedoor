@@ -9,8 +9,8 @@ use domain::shortcut::Shortcut;
 use futures::StreamExt as _;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use plugin_host::{
-    ClipboardCommand, DataSource, HostMessage, Manifest, Node, PluginLink, PluginMessage,
-    apply_patches,
+    ClipboardCommand, DataSource, HostMessage, Installer, Manifest, Node, PluginLink,
+    PluginMessage, Staged, apply_patches,
 };
 use services::stats::{Sampler, Snapshot};
 use services::weather::{self, Weather};
@@ -18,6 +18,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -41,6 +42,8 @@ pub struct DockItem {
     pub kind: ItemKind,
 }
 
+// A dock holds at most a dozen items; boxing the manifest buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum ItemKind {
     App(AppInfo),
     Plugin(Manifest),
@@ -142,6 +145,25 @@ pub enum DockEvent {
 
 impl EventEmitter<DockEvent> for Dock {}
 
+/// Installing a plugin from GitHub.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InstallState {
+    Idle,
+    /// Downloading the plugin named by this label, e.g. `owner/repo`.
+    Downloading(SharedString),
+    Failed(SharedString),
+}
+
+/// Checking a GitHub plugin for a newer commit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UpdateState {
+    Checking,
+    Updating,
+    UpToDate,
+    Updated,
+    Failed(SharedString),
+}
+
 pub enum WeatherState {
     Loading,
     Ready { weather: Weather, updated: Instant },
@@ -190,6 +212,13 @@ pub struct Dock {
     plugin_settings: BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
     /// The plugin whose card was last told it is open.
     open_plugin: Option<String>,
+    /// Plugins the user agreed to run, by id.
+    trusted: BTreeSet<String>,
+    /// The GitHub install in progress, or why the last one failed.
+    pub install: InstallState,
+    /// Update checks, by plugin id.
+    pub updates: HashMap<String, UpdateState>,
+    update_tasks: HashMap<String, Task<()>>,
     _observe_self: Option<gpui_kit::Subscription>,
     _quit: Option<gpui_kit::Subscription>,
     _tasks: Vec<Task<()>>,
@@ -213,6 +242,12 @@ impl Dock {
                 .filter(|m| !m.id.starts_with("builtin.")),
         );
         let items = resolve_items(&config.items, platform.as_ref(), &manifests);
+        // Plugins already in the dock were agreed to when they were added.
+        let mut trusted = std::mem::take(&mut config.trusted_plugins);
+        trusted.extend(config.items.iter().filter_map(|item| match item {
+            ItemConfig::Plugin { id } if !crate::builtins::contains(id) => Some(id.clone()),
+            _ => None,
+        }));
         let shortcuts = config
             .shortcuts
             .iter()
@@ -269,6 +304,10 @@ impl Dock {
             plugins: BTreeMap::new(),
             plugin_settings: config.plugin_settings,
             open_plugin: None,
+            trusted,
+            install: InstallState::Idle,
+            updates: HashMap::new(),
+            update_tasks: HashMap::new(),
             _observe_self: None,
             _quit: quit,
             _tasks: tasks,
@@ -906,12 +945,188 @@ impl Dock {
             && !self.wants_data(DataSource::Weather)
             && manifest.data.contains(&DataSource::Weather);
         self.items.push(item);
+        if !crate::builtins::contains(&manifest.id) {
+            self.trusted.insert(manifest.id.clone());
+        }
         if start_weather {
             self.weather_task = Some(Self::weather_task(self.location.clone(), cx));
         }
         self.start_plugin(&manifest, cx);
         self.items_changed(cx);
         true
+    }
+
+    // MARK: Managing plugins
+
+    /// Whether `id` can be added without asking; plugins run with the app's
+    /// access, so a new one needs the user's go-ahead once.
+    pub fn is_trusted(&self, id: &str) -> bool {
+        crate::builtins::contains(id) || self.trusted.contains(id)
+    }
+
+    pub fn in_dock(&self, id: &str) -> bool {
+        self.index_of(&format!("plugin:{id}")).is_some()
+    }
+
+    /// The manifest of a plugin in the dock, as the running plugin described it.
+    fn dock_manifest(&self, id: &str) -> Option<&Manifest> {
+        self.items.iter().find_map(|item| match &item.kind {
+            ItemKind::Plugin(manifest) if manifest.id == id => Some(manifest),
+            _ => None,
+        })
+    }
+
+    /// Every plugin, in the dock or not: the built-ins, then the rest by name.
+    pub fn installed_plugins(&self) -> Vec<Manifest> {
+        crate::builtins::manifests()
+            .into_iter()
+            .chain(
+                self.platform
+                    .plugins()
+                    .into_iter()
+                    .filter(|manifest| !manifest.id.starts_with("builtin.")),
+            )
+            .map(|manifest| {
+                self.dock_manifest(&manifest.id)
+                    .cloned()
+                    .unwrap_or(manifest)
+            })
+            .collect()
+    }
+
+    /// Downloads plugins, off the main thread.
+    pub fn installer(&self) -> Arc<dyn Installer> {
+        self.platform.plugin_installer()
+    }
+
+    pub fn set_install(&mut self, state: InstallState, cx: &mut Context<Self>) {
+        self.install = state;
+        cx.notify();
+    }
+
+    /// Installs a downloaded plugin the user agreed to, and adds it to the
+    /// dock when there's room. Installing one that's already here updates it.
+    pub fn finish_install(
+        &mut self,
+        staged: Staged,
+        cx: &mut Context<Self>,
+    ) -> Result<Manifest, String> {
+        let manifest = self.platform.install_plugin(staged)?;
+        self.trusted.insert(manifest.id.clone());
+        self.install = InstallState::Idle;
+        self.updates.remove(&manifest.id);
+        if self.in_dock(&manifest.id) {
+            self.replace_plugin(manifest.clone(), cx);
+        } else {
+            self.add_plugin(manifest.clone(), cx);
+        }
+        self.save_config();
+        cx.notify();
+        Ok(manifest)
+    }
+
+    /// Takes a plugin's new files and restarts it.
+    fn replace_plugin(&mut self, manifest: Manifest, cx: &mut Context<Self>) {
+        for item in &mut self.items {
+            if let ItemKind::Plugin(old) = &mut item.kind
+                && old.id == manifest.id
+            {
+                *old = manifest.clone();
+            }
+        }
+        if self.plugins.contains_key(&manifest.id) {
+            self.start_plugin(&manifest, cx);
+        }
+    }
+
+    /// Checks a plugin installed from GitHub for a newer commit, and
+    /// installs it if there is one.
+    pub fn update_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(source) = self
+            .installed_plugins()
+            .into_iter()
+            .find(|manifest| manifest.id == id)
+            .and_then(|manifest| manifest.source)
+        else {
+            return;
+        };
+        if matches!(
+            self.updates.get(id),
+            Some(UpdateState::Checking | UpdateState::Updating)
+        ) {
+            return;
+        }
+        let installer = self.installer();
+        let plugin = id.to_string();
+        self.updates.insert(plugin.clone(), UpdateState::Checking);
+        let task = cx.spawn(async move |this, cx| {
+            let set = |state: UpdateState, cx: &mut gpui_kit::AsyncApp| {
+                this.update(cx, |this, cx| {
+                    this.updates.insert(plugin.clone(), state);
+                    cx.notify();
+                })
+                .ok();
+            };
+            let (check, github) = (installer.clone(), source.github.clone());
+            let latest = cx
+                .background_executor()
+                .spawn(async move { check.latest_commit(&github) })
+                .await;
+            match latest {
+                Ok(commit) if commit == source.commit => return set(UpdateState::UpToDate, cx),
+                Ok(_) => set(UpdateState::Updating, cx),
+                Err(message) => return set(UpdateState::Failed(message.into()), cx),
+            }
+            let github = source.github.clone();
+            let fetched = cx
+                .background_executor()
+                .spawn(async move { installer.fetch(&github) })
+                .await;
+            let installed = this.update(cx, |this, cx| {
+                let manifest = this.platform.install_plugin(fetched?)?;
+                if this.in_dock(&manifest.id) {
+                    this.replace_plugin(manifest, cx);
+                }
+                Ok::<_, String>(())
+            });
+            match installed {
+                Ok(Ok(())) => set(UpdateState::Updated, cx),
+                Ok(Err(message)) => set(UpdateState::Failed(message.into()), cx),
+                Err(_) => {}
+            }
+        });
+        self.update_tasks.insert(id.to_string(), task);
+        cx.notify();
+    }
+
+    /// Restarts a plugin in the dock, e.g. after it stopped.
+    pub fn reload_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(manifest) = self.dock_manifest(id).cloned() {
+            self.start_plugin(&manifest, cx);
+            cx.notify();
+        }
+    }
+
+    /// Takes a plugin out of the dock, moves its folder to the Trash and
+    /// forgets its settings. Built-ins can only be removed from the dock.
+    pub fn delete_plugin(&mut self, id: &str, cx: &mut Context<Self>) -> Result<(), String> {
+        if crate::builtins::contains(id) {
+            return Err("Built-in plugins can't be deleted.".into());
+        }
+        let manifest = self
+            .installed_plugins()
+            .into_iter()
+            .find(|manifest| manifest.id == id)
+            .ok_or("The plugin isn't installed anymore.")?;
+        self.remove(&format!("plugin:{id}"), cx);
+        self.platform.delete_plugin(&manifest)?;
+        self.plugin_settings.remove(id);
+        self.trusted.remove(id);
+        self.updates.remove(id);
+        self.update_tasks.remove(id);
+        self.save_config();
+        cx.notify();
+        Ok(())
     }
 
     // MARK: Settings
@@ -1054,6 +1269,7 @@ impl Dock {
                 .map(|(id, shortcut)| (id.clone(), shortcut.to_config()))
                 .collect(),
             plugin_settings: self.plugin_settings.clone(),
+            trusted_plugins: self.trusted.clone(),
         };
         if let Err(err) = self.platform.save_config(&config) {
             eprintln!("sidedoor: couldn't save the dock: {err}");
