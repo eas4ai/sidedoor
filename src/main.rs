@@ -388,6 +388,9 @@ fn open_clipboard_history(
                     native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
@@ -506,6 +509,9 @@ fn open_plugin_window(
                     native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
@@ -584,6 +590,9 @@ fn open_settings(
                     native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
@@ -740,6 +749,9 @@ fn open_shortcut_recorder(
                     native::fade_in(&native);
                 }
             }
+            // GPUI's application-level activation is a no-op on Windows.
+            #[cfg(target_os = "windows")]
+            window.activate_window();
         })
         .ok();
 
