@@ -305,7 +305,7 @@ pub(super) fn open_clipboard_history(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("Clipboard History".into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: Some(point(
                 px(18.0),
                 px(clipboard_window::TOOLBAR_HEIGHT / 2.0 - 7.0),
@@ -315,7 +315,7 @@ pub(super) fn open_clipboard_history(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| ClipboardWindow::new(dock.clone(), window, cx))
     })
     .map_err(|err| err.to_string())?;
@@ -420,14 +420,14 @@ pub(super) fn open_plugin_window(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some(declared.title.clone().into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: Some(point(px(14.0), px(plugin_window::TITLE_BAR / 2.0 - 7.0))),
         }),
         window_min_size: Some(size(px(280.0), px(200.0))),
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| {
             plugin_window::PluginWindow::new(
                 dock.clone(),
@@ -509,7 +509,7 @@ pub(super) fn open_settings(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some(settings_window::Tab::General.title().into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: None,
         }),
         is_resizable: false,
@@ -517,7 +517,7 @@ pub(super) fn open_settings(
         ..Default::default()
     };
     let lookup: settings_window::PlaceLookup = std::sync::Arc::new(weather::search);
-    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| SettingsWindow::new(dock.clone(), lookup, window, cx))
     })
     .map_err(|err| err.to_string())?;

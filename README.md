@@ -31,11 +31,9 @@ Run `cargo run`, or build and install the app with
 Sidedoor runs on X11 desktops, and on Wayland sessions through XWayland
 (it switches to X11 itself, since Wayland doesn't let an app follow the
 pointer or place a dock). It looks the same as on macOS: the views are
-shared, text uses [Inter](https://rsms.me/inter/) when it is installed, and
-windows draw a macOS-style frame with traffic lights, rounded corners and a
-shadow. That frame needs a compositing window manager that supports
-`_GTK_FRAME_EXTENTS` (GNOME, KDE Plasma, Xfce); otherwise the window
-manager's own frame is used.
+shared, and text uses [Inter](https://rsms.me/inter/) when it is installed.
+Windows keep the desktop's own title bar, as they do on Windows; on macOS
+the traffic lights sit in the window's toolbar.
 
 Install the build libraries and Inter, then run `cargo run`:
 

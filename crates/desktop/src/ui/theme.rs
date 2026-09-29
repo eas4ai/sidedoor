@@ -91,15 +91,6 @@ pub fn sync_kit_theme(window: &mut Window, cx: &mut App) {
     });
 }
 
-/// The opaque surface of a window, painted by a drawn window frame.
-pub fn window_surface(window: &Window) -> Hsla {
-    if is_dark(window) {
-        Palette::dark().surface
-    } else {
-        Palette::light().surface
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct Palette {
     /// `labelColor`
@@ -156,10 +147,7 @@ impl Palette {
             palette.stroke = palette.label.opacity(0.55);
             palette.separator = palette.label.opacity(0.35);
         }
-        if crate::ui::chrome::is_drawn(window) {
-            // The drawn window frame paints the surface, with its corners.
-            palette.surface = color(0x00000000);
-        } else if accessibility.reduce_transparency || !::platform::native::has_material() {
+        if accessibility.reduce_transparency || !::platform::native::has_material() {
             palette.group = if dark {
                 color(0x2a2a2aff)
             } else {

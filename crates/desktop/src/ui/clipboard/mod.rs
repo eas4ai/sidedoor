@@ -289,7 +289,7 @@ impl Render for ClipboardWindow {
             .gap(px(DETAIL_GAP))
             .children(selected.map(|entry| {
                 let rows = information_rows(entry, offset);
-                let image_box = image_box(crate::ui::chrome::content_size(window), rows.len());
+                let image_box = image_box(window.viewport_size(), rows.len());
                 div()
                     .flex_1()
                     .min_h_0()
@@ -357,8 +357,12 @@ fn toolbar(
     div()
         .h(px(TOOLBAR_HEIGHT))
         .flex_shrink_0()
-        // Room for the window's traffic lights.
-        .pl(px(84.0))
+        // Room for the window's traffic lights, where they sit in the toolbar.
+        .pl(px(if crate::ui::chrome::INSET_TITLE_BAR {
+            84.0
+        } else {
+            12.0
+        }))
         .pr(px(12.0))
         .flex()
         .items_center()

@@ -25,9 +25,10 @@ use std::{sync::Arc, time::Duration};
 
 /// Key context of the window, so its keys are handled only here.
 pub const CONTEXT: &str = "Settings";
-pub const WINDOW_SIZE: (f32, f32) = (620.0, 560.0);
-/// The title row, which lines up with the traffic lights.
-const TITLE_HEIGHT: f32 = 28.0;
+/// The title row, which lines up with the traffic lights. The system
+/// caption shows the title elsewhere.
+const TITLE_HEIGHT: f32 = crate::ui::chrome::title_strip(28.0);
+pub const WINDOW_SIZE: (f32, f32) = (620.0, 532.0 + TITLE_HEIGHT);
 /// How long typing pauses before a place search starts.
 const SEARCH_DELAY: Duration = Duration::from_millis(300);
 const PAGE_FADE: Duration = Duration::from_millis(180);
@@ -386,15 +387,18 @@ fn toolbar(view: &Entity<SettingsWindow>, current: Tab, palette: Palette) -> imp
         .border_b_1()
         .border_color(palette.separator)
         .window_control_area(WindowControlArea::Drag)
-        .child(
-            div()
-                .h(px(TITLE_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(current.title()),
-        )
+        .when(crate::ui::chrome::INSET_TITLE_BAR, |this| {
+            this.child(
+                div()
+                    .h(px(TITLE_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(current.title()),
+            )
+        })
+        .when(!crate::ui::chrome::INSET_TITLE_BAR, |this| this.pt(px(6.0)))
         .child(div().flex().justify_center().gap(px(2.0)).children(tabs))
 }
 

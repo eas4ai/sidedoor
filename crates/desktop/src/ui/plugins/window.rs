@@ -7,11 +7,12 @@ use crate::ui::theme::{Palette, text};
 use gpui_kit::{
     Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
     Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
-    TestSupportExt as _, Window, div, px,
+    TestSupportExt as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
-/// The height of the title bar strip the traffic lights sit in.
-pub const TITLE_BAR: f32 = 38.0;
+/// The height of the title bar strip the traffic lights sit in; the system
+/// caption shows the title outside macOS.
+pub const TITLE_BAR: f32 = crate::ui::chrome::title_strip(38.0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PluginWindowEvent {
@@ -90,16 +91,18 @@ impl Render for PluginWindow {
             .bg(palette.surface)
             .text_color(palette.label)
             .text_size(px(text::BODY))
-            .child(
-                div()
-                    .h(px(TITLE_BAR))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(self.title.clone()),
-            )
+            .when(crate::ui::chrome::INSET_TITLE_BAR, |this| {
+                this.child(
+                    div()
+                        .h(px(TITLE_BAR))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(self.title.clone()),
+                )
+            })
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -114,6 +117,9 @@ impl Render for PluginWindow {
                         div()
                             .px(px(16.0))
                             .pb(px(16.0))
+                            .when(!crate::ui::chrome::INSET_TITLE_BAR, |this| {
+                                this.pt(px(16.0))
+                            })
                             .flex()
                             .flex_col()
                             .gap(px(10.0))

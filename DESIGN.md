@@ -105,10 +105,13 @@ backgrounds.
 | Windows (Clipboard History, Settings, plugin windows) | `NSVisualEffectMaterial::Sidebar` behind a transparent title bar |
 
 X11 has no system materials, so on Linux every surface is painted with the
-palette's opaque surface, as with Reduce Transparency on macOS. Windows get
-a drawn macOS frame (`ui::chrome`): traffic lights, a 10-point corner radius,
-a hairline and a soft shadow. Context menus are drawn like `NSMenu`
-(`ui::menu`) in their own pop-up window.
+palette's opaque surface, as with Reduce Transparency on macOS. Context
+menus are drawn like `NSMenu` (`ui::menu`) in their own pop-up window.
+
+Each platform keeps its native title bar. On macOS it is transparent and
+the traffic lights sit in the window's toolbar or title row; on Windows and
+Linux the system caption shows the title, so views drop the traffic-light
+room and their own title row (`ui::chrome::INSET_TITLE_BAR`).
 
 The dock and card materials stay in the active state even though Sidedoor is
 never the active app. Otherwise they'd go flat and grey the moment you look at

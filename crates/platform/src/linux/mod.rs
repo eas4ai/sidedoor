@@ -49,10 +49,6 @@ x11rb::atom_manager! {
         WM_CLASS,
         TARGETS,
         SIDEDOOR_SELECTION,
-        WM_PROTOCOLS,
-        WM_DELETE_WINDOW,
-        _MOTIF_WM_HINTS,
-        _GTK_FRAME_EXTENTS,
         _NET_MOVERESIZE_WINDOW,
     }
 }

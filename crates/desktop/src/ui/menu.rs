@@ -316,7 +316,7 @@ mod drawn {
             let accessibility = self.dock.read(cx).accessibility;
             let palette = Palette::new(window, accessibility);
             let dark = crate::ui::theme::is_dark(window);
-            let background = crate::ui::theme::window_surface(window);
+            let background = palette.surface;
             let view = cx.entity();
             let rows = self
                 .entries

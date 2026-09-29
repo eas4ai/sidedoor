@@ -98,7 +98,7 @@ pub(super) fn open_shortcut_recorder(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("Assign Shortcut".into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: Some(point(px(14.0), px(14.0))),
         }),
         is_resizable: false,
@@ -106,7 +106,7 @@ pub(super) fn open_shortcut_recorder(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let (handle, view) = crate::ui::chrome::open_window(options, dock, cx, |window, cx| {
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| ShortcutRecorder::new(title, icon, glyph, current, check, window, cx))
     })
     .map_err(|err| err.to_string())?;

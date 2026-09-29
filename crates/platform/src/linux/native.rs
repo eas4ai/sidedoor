@@ -202,9 +202,29 @@ pub fn has_material() -> bool {
     false
 }
 
-pub fn add_window_material(_window: &NativeWindow) {
-    // Regular windows keep the window manager's frame and paint their
-    // own surface.
+/// Regular windows keep the window manager's title bar and paint their
+/// own surface. Window managers place new windows by their own policy;
+/// center it on the primary display's work area, as on macOS and Windows.
+pub fn add_window_material(window: &NativeWindow) {
+    let (Some(x), Some(display)) = (x(), linux::primary_display()) else {
+        return;
+    };
+    let Some(geometry) = x
+        .conn
+        .get_geometry(window.id)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return;
+    };
+    let (wx, wy, ww, wh) = display.work;
+    move_window(
+        window,
+        (
+            wx + (ww - i32::from(geometry.width)) / 2,
+            wy + (wh - i32::from(geometry.height)) / 2,
+        ),
+    );
 }
 
 /// An outline in window points: a rounded rectangle, as corner curves
@@ -593,81 +613,11 @@ pub fn hide_card(window: &NativeWindow, anchor: Option<Point>) {
     flush();
 }
 
-/// Whether the app can draw a window's frame itself: the window manager
-/// must let a client draw its own shadow (`_GTK_FRAME_EXTENTS`), and a
-/// compositor must show the shadow's transparency.
-pub fn can_draw_frame() -> bool {
-    let Some(x) = x() else {
-        return false;
-    };
-    let supported = x
-        .conn
-        .get_property(
-            false,
-            x.root,
-            x.conn
-                .intern_atom(true, b"_NET_SUPPORTED")
-                .ok()
-                .and_then(|cookie| cookie.reply().ok())
-                .map_or(x11rb::NONE, |reply| reply.atom),
-            xproto::AtomEnum::ATOM,
-            0,
-            4096,
-        )
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .and_then(|reply| {
-            reply
-                .value32()
-                .map(|mut atoms| atoms.any(|atom| atom == x.atoms._GTK_FRAME_EXTENTS))
-        })
-        .unwrap_or(false);
-    supported && linux::has_compositor()
-}
-
-/// Removes the window manager's frame; the app draws the window's frame,
-/// with a shadow `shadow` points wide that the window manager should treat
-/// as outside the window.
-pub fn draw_own_frame(window: &NativeWindow, shadow: f64) {
+/// Moves a managed window's top-left to `origin`, in X root pixels.
+fn move_window(window: &NativeWindow, origin: (i32, i32)) {
     let Some(x) = x() else {
         return;
     };
-    // Motif hints: decorations flag set, no decorations.
-    let _ = x.conn.change_property32(
-        xproto::PropMode::REPLACE,
-        window.id,
-        x.atoms._MOTIF_WM_HINTS,
-        x.atoms._MOTIF_WM_HINTS,
-        &[1 << 1, 0, 0, 0, 0],
-    );
-    set_frame_extents(window, shadow);
-}
-
-/// Updates how much of the window is shadow, e.g. none while maximized.
-pub fn set_frame_extents(window: &NativeWindow, shadow: f64) {
-    let Some(x) = x() else {
-        return;
-    };
-    let scale = linux::primary_display().map_or(1.0, |display| display.scale);
-    let extent = (shadow * scale).round() as u32;
-    let _ = x.conn.change_property32(
-        xproto::PropMode::REPLACE,
-        window.id,
-        x.atoms._GTK_FRAME_EXTENTS,
-        x.atoms.CARDINAL,
-        &[extent; 4],
-    );
-    flush();
-}
-
-/// Moves a managed window's top-left to `origin`, in GPUI's global logical
-/// coordinates. Window managers place new windows by their own policy;
-/// this keeps the position the app asked for, such as centered.
-pub fn move_window(window: &NativeWindow, origin: (f64, f64)) {
-    let Some(x) = x() else {
-        return;
-    };
-    let scale = linux::primary_display().map_or(1.0, |display| display.scale);
     // Static gravity: the coordinates are the client window's own. Source 2
     // is a tool acting for the user, which window managers honor.
     let flags = 10 | (1 << 8) | (1 << 9) | (2 << 12);
@@ -675,13 +625,7 @@ pub fn move_window(window: &NativeWindow, origin: (f64, f64)) {
         32,
         window.id,
         x.atoms._NET_MOVERESIZE_WINDOW,
-        [
-            flags,
-            (origin.0 * scale).round() as i32 as u32,
-            (origin.1 * scale).round() as i32 as u32,
-            0,
-            0,
-        ],
+        [flags, origin.0 as u32, origin.1 as u32, 0, 0],
     );
     let _ = x.conn.send_event(
         false,
@@ -749,24 +693,6 @@ pub fn end_menu(window: &NativeWindow) {
     if let Some(previous) = window.state.previous.take() {
         activate_app(previous);
     }
-    flush();
-}
-
-/// Asks the window to close as the window manager's close button does, so
-/// GPUI runs the window's should-close handlers.
-pub fn request_close(window: &NativeWindow) {
-    let Some(x) = x() else {
-        return;
-    };
-    let message = xproto::ClientMessageEvent::new(
-        32,
-        window.id,
-        x.atoms.WM_PROTOCOLS,
-        [x.atoms.WM_DELETE_WINDOW, x11rb::CURRENT_TIME, 0, 0, 0],
-    );
-    let _ = x
-        .conn
-        .send_event(false, window.id, xproto::EventMask::NO_EVENT, message);
     flush();
 }
 
