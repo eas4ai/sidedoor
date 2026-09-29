@@ -1,63 +1,22 @@
-[package]
-name = "sidedoor"
+[workspace]
+resolver = "3"
+members = [
+    "crates/desktop",
+    "crates/domain",
+    "crates/platform",
+    "crates/services",
+    "crates/plugin-host",
+]
+default-members = ["crates/desktop"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Sidedoor: a second dock at the edge of your screen, built with GPUI Kit."
 publish = false
-
-[dependencies]
-gpui-kit = "0.7.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-futures = "0.3"
-sysinfo = { version = "0.31", default-features = false, features = ["system", "disk"] }
-ureq = "2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-block2 = "0.6"
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["objc2-core-graphics", "objc2-quartz-core"] }
-objc2-core-graphics = "0.3"
-objc2-foundation = "0.3"
-objc2-quartz-core = "0.3"
-objc2-service-management = "0.3"
-objc2-user-notifications = "0.3"
-raw-window-handle = "0.6"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-raw-window-handle = "0.6"
-arboard = "3.6"
-clipboard-win = "5.4"
-image = { version = "0.25", default-features = false, features = ["png"] }
-windows = { version = "0.61.3", features = ["Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell", "Win32_Storage_FileSystem"] }
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Dwm",
-    "Win32_Storage_FileSystem",
-    "Win32_System_DataExchange",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Registry",
-    "Win32_System_Threading",
-    "Win32_System_Time",
-    "Win32_UI_Accessibility",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Shell",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-] }
 
 [profile.release]
 lto = "thin"
 strip = true
-
-[build-dependencies]
-winresource = "0.1.30"
-
-[dev-dependencies]
-gpui-kit = { version = "0.7.0", features = ["test-support"] }
 
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
@@ -69,3 +28,15 @@ gpui-pre-platform = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
+
+[workspace.dependencies]
+domain = { path = "crates/domain" }
+platform = { path = "crates/platform" }
+services = { path = "crates/services" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = { version = "0.31", default-features = false, features = ["system", "disk"] }
+ureq = "2"
+gpui-kit = "0.7.0"
+futures = "0.3"
+plugin-host = { path = "crates/plugin-host" }

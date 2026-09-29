@@ -2,13 +2,29 @@
 
 A dock that hides at a screen edge, with app launchers and native widget cards.
 Built with Rust and GPUI Kit. Weather, Stats, and Clipboard are bundled TSX
-plugins in [`src/builtins`](src/builtins); custom plugins use the same
+plugins in [`crates/desktop/src/builtins`](crates/desktop/src/builtins); custom plugins use the same
 [`SDK`](sdk/README.md).
+
+## Workspace
+
+The root is a virtual Cargo workspace. `cargo run` starts the `desktop` crate's
+`sidedoor` binary. Built-in plugins live with the desktop app; the TypeScript
+SDK remains its own Bun package at the repository root.
+
+| Crate | Responsibility |
+| --- | --- |
+| `desktop` | Startup, app state, shared GPUI views, built-in TSX plugins, icons |
+| `domain` | Pure models, config schema and migrations, clipboard rules, geometry, motion |
+| `platform` | macOS/Windows APIs, native windows, clipboard, shortcuts, tray, paths |
+| `services` | Config/history persistence, weather requests, system sampling, image downloads |
+| `plugin-host` | Plugin manifests, protocol, discovery, reload, Bun supervisor, SDK setup |
+
+See [architecture](docs/architecture.md) for dependency boundaries and source layout.
 
 ## macOS
 
 Run `cargo run`, or build and install the app with
-`./scripts/bundle.sh --install`. Bundles include Bun for the plugin runtime.
+`./scripts/package/macos.sh --install`. Bundles include Bun for the plugin runtime.
 
 ## Windows test builds
 
@@ -24,7 +40,7 @@ Build Tools with a Windows SDK (including `fxc.exe`), and Bun. Then run:
 cd sdk
 bun install --frozen-lockfile
 cd ..
-./scripts/bundle-windows.ps1
+./scripts/package/windows.ps1
 ```
 
 The Windows port is undergoing desktop validation. See the
@@ -35,9 +51,9 @@ capabilities of the Windows version; widget content uses the shared UI.
 ## Checks
 
 ```sh
-cargo fmt --check
-cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
+cargo fmt --all --check
+cargo test --workspace --locked
+cargo clippy --workspace --locked --all-targets -- -D warnings
 cd sdk
 bun test
 bun run check

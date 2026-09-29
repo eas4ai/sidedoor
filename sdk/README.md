@@ -325,7 +325,7 @@ doesn't fit its copy of the tree.
 ## Built-in plugins and native data
 
 Weather, Stats, and Clipboard are ordinary `definePlugin` plugins in
-`src/builtins/`. They ship with Sidedoor and run in the same supervisor as user
+`crates/desktop/src/builtins/`. They ship with Sidedoor and run in the same supervisor as user
 plugins. The app bundles Bun, so an installed app does not need a separate Bun
 installation. Existing widget entries and their shortcuts migrate automatically.
 
@@ -363,6 +363,6 @@ Tile nodes can opt into hover scaling with `magnify`; `div` supports
 respects Reduce Motion.
 
 For development, run `bun install --frozen-lockfile`, `bun run check`, and
-`bun test` from `sdk/`, then `cargo test --locked` from the repository root.
+`bun test` from `sdk/`, then `cargo test --workspace --locked` from the repository root.
 The Rust UI tests use Bun to render the actual built-in TSX against fake native
-services. `scripts/bundle.sh` packages the runtime and compiles the built-ins.
+services. `scripts/package/macos.sh` packages the runtime and compiles the built-ins.
