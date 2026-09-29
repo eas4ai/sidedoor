@@ -145,6 +145,19 @@ pub fn activate_app(app: ForegroundApp) {
         xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
         message,
     );
+    // Some window managers ignore the request while one of our pop-ups
+    // holds the keyboard; focusing the client directly always lands.
+    let viewable = x
+        .conn
+        .get_window_attributes(app.0)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|attributes| attributes.map_state == xproto::MapState::VIEWABLE);
+    if viewable {
+        let _ = x
+            .conn
+            .set_input_focus(xproto::InputFocus::PARENT, app.0, x11rb::CURRENT_TIME);
+    }
     let _ = x.conn.flush();
 }
 
@@ -696,6 +709,23 @@ pub fn end_menu(window: &NativeWindow) {
     flush();
 }
 
+/// Gives a pop-up panel the keyboard, as clicking a text field in a
+/// non-activating panel does on macOS. Unmanaged windows never get focus
+/// from the window manager. The app the user was in gets it back when the
+/// card closes.
+pub fn take_keyboard(window: &gpui_kit::Window) {
+    let (Some(x), Some(native)) = (x(), window_handle(window)) else {
+        return;
+    };
+    if is_key_window(&native) {
+        return;
+    }
+    let _ = x
+        .conn
+        .set_input_focus(xproto::InputFocus::PARENT, native.id, x11rb::CURRENT_TIME);
+    flush();
+}
+
 pub fn is_key_window(window: &NativeWindow) -> bool {
     x().and_then(|x| x.conn.get_input_focus().ok()?.reply().ok())
         .is_some_and(|focus| focus.focus == window.id)
@@ -706,11 +736,13 @@ pub fn dismiss_if_invisible(window: &NativeWindow) {
         return;
     }
     let restore = is_key_window(window);
-    if window.state.panel.get() {
-        hide(window);
-    }
+    // Hand the keyboard back before unmapping, or the window manager takes
+    // it when the focused window disappears.
     if restore && let Some(previous) = window.state.previous.take() {
         activate_app(previous);
+    }
+    if window.state.panel.get() {
+        hide(window);
     }
     flush();
 }

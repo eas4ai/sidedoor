@@ -199,6 +199,8 @@ pub struct Dock {
     clear_armed: Option<Task<()>>,
     screen: Screen,
     reveal: Reveal,
+    /// Where the open card's window is, in screen points.
+    card_frame: Option<Rect>,
     /// A context menu is open; the dock stays as it is until it closes,
     /// as it does while a macOS menu tracks the pointer.
     menu_open: bool,
@@ -302,6 +304,7 @@ impl Dock {
             clear_armed: None,
             screen,
             menu_open: false,
+            card_frame: None,
             reveal: Reveal::default(),
             live: services.live,
             weather_task,
@@ -383,6 +386,16 @@ impl Dock {
     }
 
     pub fn set_card_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        // A card typed into can report the pointer leaving while it hasn't
+        // (key events in an X11 pop-up); believe the real pointer.
+        if !hovered
+            && self.live
+            && self
+                .card_frame
+                .is_some_and(|frame| frame.contains(self.platform.pointer()))
+        {
+            return;
+        }
         self.pointer_on_card = hovered;
         if hovered {
             self.close_card = None;
@@ -1417,6 +1430,11 @@ impl Dock {
     }
 
     // MARK: Polling
+
+    /// Records where the card's window is, as the native windows place it.
+    pub fn set_card_frame(&mut self, frame: Option<Rect>) {
+        self.card_frame = frame;
+    }
 
     /// Holds the dock in place while a context menu is open.
     pub fn set_menu_open(&mut self, open: bool) {

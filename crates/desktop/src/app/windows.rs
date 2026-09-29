@@ -155,6 +155,9 @@ impl Panels {
         }
         let previous = self.card_placement;
         self.card_placement = placement;
+        dock.update(cx, |dock, _| {
+            dock.set_card_frame(placement.map(|placement| placement.frame))
+        });
         let motion = !accessibility.reduce_motion;
         match placement {
             Some(placement) => {
