@@ -218,6 +218,12 @@ pub mod fake {
                     key: "reset".into(),
                     title: "Reset Counter".into(),
                 }],
+                windows: vec![crate::plugin::PluginWindow {
+                    key: "history".into(),
+                    title: "Counter History".into(),
+                    width: 400.0,
+                    height: 300.0,
+                }],
                 dir: PathBuf::from("/plugins/counter"),
                 main: PathBuf::from("index.tsx"),
             }];
@@ -341,6 +347,7 @@ pub mod fake {
                 settings: Vec::new(),
                 clickable: false,
                 actions: Vec::new(),
+                windows: Vec::new(),
                 dir: PathBuf::from(format!("/plugins/{}", name.to_lowercase())),
                 main: PathBuf::from("index.tsx"),
             };

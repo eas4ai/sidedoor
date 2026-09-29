@@ -8,6 +8,7 @@ import {
   Chart,
   Icon,
   Segmented,
+  Text,
   createStore,
   definePlugin,
   sidedoor,
@@ -54,16 +55,22 @@ function logSession(minutes: number) {
   sidedoor.storage.set("history", { ...history, [today]: (history[today] ?? 0) + minutes });
 }
 
-/** The last seven days, oldest first, for the chart. */
-function week(history: History) {
-  return Array.from({ length: 7 }, (_, index) => {
-    const day = new Date(Date.now() - (6 - index) * 86_400_000);
+/** The last `count` days, oldest first, for the charts. */
+function days(history: History, count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const day = new Date(Date.now() - (count - 1 - index) * 86_400_000);
     return {
-      label: day.toLocaleDateString("en", { weekday: "short" }),
+      label:
+        count <= 7
+          ? day.toLocaleDateString("en", { weekday: "short" })
+          : day.toLocaleDateString("en", { month: "short", day: "numeric" }),
       value: history[dayKey(day)] ?? 0,
     };
   });
 }
+
+const hours = (minutes: number) =>
+  minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 
 function toggle() {
   const timer = saved();
@@ -91,6 +98,43 @@ export default definePlugin({
   onClick: toggle,
   actions: {
     reset: { title: "Reset Timer", run: () => restart(saved().minutes) },
+    history: { title: "Focus History…", run: () => sidedoor.openWindow("history") },
+  },
+
+  windows: {
+    history: {
+      title: "Focus History",
+      width: 520,
+      height: 400,
+      render() {
+        const [history] = useStorage<History>("history", {});
+        const month = days(history, 30);
+        const total = month.reduce((sum, day) => sum + day.value, 0);
+        const best = month.reduce((top, day) => (day.value > top.value ? day : top), month[0]);
+        return (
+          <>
+            <div flex gap={10}>
+              {[
+                ["Last 30 days", hours(total)],
+                ["Daily average", hours(Math.round(total / 30))],
+                ["Best day", best.value ? `${best.label}, ${hours(best.value)}` : "None yet"],
+              ].map(([title, value]) => (
+                <div key={title} flex_1 flex flex_col gap={2} p={10} rounded={10} bg="fill">
+                  <Text variant="caption" secondary>{title}</Text>
+                  <Text variant="headline">{value}</Text>
+                </div>
+              ))}
+            </div>
+            <Chart kind="area" h={200} color="orange" name="Minutes" y_axis grid data={month} />
+            <Button
+              variant="link"
+              label="Clear History"
+              on_click={() => sidedoor.storage.delete("history")}
+            />
+          </>
+        );
+      },
+    },
   },
 
   tile() {
@@ -168,7 +212,8 @@ export default definePlugin({
           />
           <Button icon="rotate-ccw" label="Reset" on_click={() => restart(minutes)} />
         </div>
-        <Chart kind="bar" h={64} mt={4} color="orange" name="Minutes" data={week(history)} />
+        <Chart kind="bar" h={64} mt={4} color="orange" name="Minutes" data={days(history, 7)} />
+        <Button variant="link" label="Show History" on_click={() => sidedoor.openWindow("history")} />
       </Card>
     );
   },

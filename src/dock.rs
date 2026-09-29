@@ -14,7 +14,7 @@ use crate::{
 use futures::StreamExt as _;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
@@ -97,6 +97,10 @@ impl DockItem {
 pub struct PluginState {
     pub tile: Option<Vec<Node>>,
     pub card: Option<Vec<Node>>,
+    /// What each open window shows, by the window's key.
+    pub windows: HashMap<String, Vec<Node>>,
+    /// Windows open on screen; they stay open across a reload.
+    pub open_windows: BTreeSet<String>,
     /// Why it isn't drawing, e.g. a compile error.
     pub problem: Option<SharedString>,
     /// Recent `console.log` lines and errors, oldest first.
@@ -138,9 +142,19 @@ impl Widget {
 }
 
 /// Requests the dock makes of the app around it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DockEvent {
     OpenClipboardHistory,
+    /// A plugin asked for one of its windows.
+    OpenPluginWindow {
+        plugin: String,
+        key: String,
+    },
+    /// A plugin closed one of its windows, or stopped.
+    ClosePluginWindow {
+        plugin: String,
+        key: String,
+    },
     /// Shortcuts were assigned or removed; re-register them.
     ShortcutsChanged,
 }
@@ -391,6 +405,22 @@ impl Dock {
         }
     }
 
+    /// A plugin window closed, by its close button or the plugin's word.
+    pub fn plugin_window_closed(&mut self, plugin: &str, key: &str) {
+        let Some(state) = self.plugins.get_mut(plugin) else {
+            return;
+        };
+        if state.open_windows.remove(key) {
+            state.windows.remove(key);
+            if let Some(link) = state.link.as_mut() {
+                link.send(&HostMessage::Window {
+                    key: key.to_string(),
+                    open: false,
+                });
+            }
+        }
+    }
+
     /// Runs a command from a plugin item's context menu. `id` is the
     /// plugin's id, not the item's.
     pub fn run_plugin_action(&mut self, id: &str, key: &str) {
@@ -471,7 +501,14 @@ impl Dock {
             let item = self.items.remove(index);
             if let ItemKind::Plugin(manifest) = &item.kind {
                 // Dropping its state stops the process.
-                self.plugins.remove(&manifest.id);
+                if let Some(state) = self.plugins.remove(&manifest.id) {
+                    for key in state.open_windows {
+                        cx.emit(DockEvent::ClosePluginWindow {
+                            plugin: manifest.id.clone(),
+                            key,
+                        });
+                    }
+                }
             }
             if self.shortcuts.remove(id).is_some() {
                 cx.emit(DockEvent::ShortcutsChanged);
@@ -509,9 +546,16 @@ impl Dock {
         };
         // A reload keeps showing what the plugin last drew until it draws again.
         let old = self.plugins.remove(&manifest.id);
-        let (tile, card, logs, height) = match old {
-            Some(old) => (old.tile, old.card, old.logs, old.height),
-            None => (None, None, VecDeque::new(), None),
+        let (tile, card, windows, open_windows, logs, height) = match old {
+            Some(old) => (
+                old.tile,
+                old.card,
+                old.windows,
+                old.open_windows,
+                old.logs,
+                old.height,
+            ),
+            None => Default::default(),
         };
         let settings = self.plugin_values(manifest);
         let state = match self.platform.start_plugin(manifest, &settings) {
@@ -528,13 +572,23 @@ impl Dock {
                         }
                     }
                 });
+                let mut link = connection.link;
+                // Windows still on screen from before a reload draw again.
+                for key in &open_windows {
+                    link.send(&HostMessage::Window {
+                        key: key.clone(),
+                        open: true,
+                    });
+                }
                 PluginState {
                     tile,
                     card,
+                    windows,
+                    open_windows,
                     problem: None,
                     logs,
                     height,
-                    link: Some(connection.link),
+                    link: Some(link),
                     fingerprint,
                     _task: Some(task),
                 }
@@ -542,6 +596,8 @@ impl Dock {
             Err(problem) => PluginState {
                 tile,
                 card,
+                windows,
+                open_windows,
                 problem: Some(problem.into()),
                 logs,
                 height,
@@ -571,14 +627,22 @@ impl Dock {
             PluginMessage::Render { surface, tree } => {
                 match surface.as_str() {
                     "tile" => state.tile = Some(tree),
-                    _ => state.card = Some(tree),
+                    "card" => state.card = Some(tree),
+                    other => {
+                        if let Some(key) = other.strip_prefix("window:") {
+                            state.windows.insert(key.to_string(), tree);
+                        }
+                    }
                 }
                 state.problem = None;
             }
             PluginMessage::Patch { surface, patches } => {
                 let tree = match surface.as_str() {
                     "tile" => state.tile.as_mut(),
-                    _ => state.card.as_mut(),
+                    "card" => state.card.as_mut(),
+                    other => other
+                        .strip_prefix("window:")
+                        .and_then(|key| state.windows.get_mut(key)),
                 };
                 let applied = tree.is_some_and(|tree| apply_patches(tree, patches));
                 if !applied {
@@ -621,6 +685,43 @@ impl Dock {
             }
             PluginMessage::Copy { text } => {
                 self.platform.write_pasteboard(&ClipKind::Text { text });
+                return;
+            }
+            PluginMessage::OpenWindow { key } => {
+                let declared = self.items.iter().any(|item| match &item.kind {
+                    ItemKind::Plugin(manifest) => {
+                        manifest.id == id && manifest.windows.iter().any(|w| w.key == key)
+                    }
+                    _ => false,
+                });
+                if !declared {
+                    push_log(
+                        &mut state.logs,
+                        &format!("error: openWindow(\"{key}\"): no such window in definePlugin"),
+                    );
+                    cx.notify();
+                    return;
+                }
+                if state.open_windows.insert(key.clone())
+                    && let Some(link) = state.link.as_mut()
+                {
+                    link.send(&HostMessage::Window {
+                        key: key.clone(),
+                        open: true,
+                    });
+                }
+                cx.emit(DockEvent::OpenPluginWindow {
+                    plugin: id.to_string(),
+                    key,
+                });
+                return;
+            }
+            PluginMessage::CloseWindow { key } => {
+                self.plugin_window_closed(id, &key);
+                cx.emit(DockEvent::ClosePluginWindow {
+                    plugin: id.to_string(),
+                    key,
+                });
                 return;
             }
             PluginMessage::Notify { title, body } => {

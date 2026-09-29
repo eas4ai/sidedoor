@@ -1486,3 +1486,123 @@ fn plugins_draw_line_area_and_bar_charts(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn plugin_windows_open_draw_and_close(cx: &mut TestAppContext) {
+    use crate::dock::DockEvent;
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = events.clone();
+    cx.update(|cx| {
+        cx.subscribe(&h.dock, move |_, event: &DockEvent, _| {
+            seen.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    let window_event = |open| HostMessage::Window {
+        key: "history".into(),
+        open,
+    };
+
+    // An undeclared window is refused and logged.
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::OpenWindow { key: "nope".into() },
+    );
+    assert!(events.borrow().is_empty());
+
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::OpenWindow {
+            key: "history".into(),
+        },
+    );
+    assert_eq!(
+        *events.borrow(),
+        [DockEvent::OpenPluginWindow {
+            plugin: "counter".into(),
+            key: "history".into()
+        }]
+    );
+    assert_eq!(sent(&h, "counter"), [window_event(true)]);
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        render(
+            "window:history",
+            serde_json::json!([{ "t": "div", "p": { "id": "list", "h": 40 }, "c": ["3 clicks"] }]),
+        ),
+    );
+
+    let dock = h.dock.clone();
+    let (window, _) = cx.update(|cx| {
+        gpui_kit::open_window(options(400.0, 300.0), cx, |window, cx| {
+            cx.new(|cx| {
+                crate::plugin_window::PluginWindow::new(
+                    dock,
+                    "counter".into(),
+                    "history".into(),
+                    "Counter History".into(),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let list = window.find("plugin:counter:list").bounds();
+        assert_eq!(list.size.height, px(40.0));
+        // Below the title bar.
+        assert!(list.origin.y >= px(crate::plugin_window::TITLE_BAR));
+    })
+    .unwrap();
+
+    // The close button tells the plugin, once.
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, _| {
+            dock.plugin_window_closed("counter", "history");
+            dock.plugin_window_closed("counter", "history");
+        })
+    });
+    assert_eq!(
+        sent(&h, "counter"),
+        [window_event(true), window_event(false)]
+    );
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert!(dock.plugin("counter").unwrap().windows.is_empty());
+    });
+
+    // Removing the plugin closes what it had open.
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::OpenWindow {
+            key: "history".into(),
+        },
+    );
+    cx.update(|cx| {
+        h.dock
+            .update(cx, |dock, cx| dock.remove("plugin:counter", cx))
+    });
+    assert_eq!(
+        events.borrow().last(),
+        Some(&DockEvent::ClosePluginWindow {
+            plugin: "counter".into(),
+            key: "history".into()
+        })
+    );
+}

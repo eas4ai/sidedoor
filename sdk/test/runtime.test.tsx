@@ -140,6 +140,7 @@ test("definePlugin carries the whole manifest and its defaults", () => {
     ],
     clickable: false,
     actions: [],
+    windows: [],
   });
   expect(defaults).toEqual({ length: "15", sound: true, note: "" });
 });

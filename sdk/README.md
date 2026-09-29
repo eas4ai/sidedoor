@@ -51,6 +51,7 @@ export default definePlugin({
 - `settings`: optional. See [Settings](#settings).
 - `card` and `tile`: see [Surfaces](#surfaces).
 - `onClick` and `actions`: optional. See [Clicks and commands](#clicks-and-commands).
+- `windows`: optional. See [Windows](#windows).
 
 There is no JSON to write. The app lists a plugin by reading `name` and
 `icon` from the file as text, without running it, and learns the rest when
@@ -109,6 +110,38 @@ definePlugin({
   shortcut (**Assign Shortcut…** in its context menu) clicks too, instead
   of showing the card.
 - `actions` go at the top of the item's context menu, in order.
+
+## Windows
+
+For more room than a card has, declare windows by key and open one with
+`sidedoor.openWindow(key)`, from a button, `onClick` or an action:
+
+```tsx
+definePlugin({
+  windows: {
+    history: {
+      title: "Focus History",
+      width: 520, // points; 480 × 360 by default
+      height: 400,
+      render: ({ settings }) => <Chart kind="area" data={…} />,
+    },
+  },
+  actions: {
+    history: { title: "Focus History…", run: () => sidedoor.openWindow("history") },
+  },
+  …
+});
+```
+
+The app opens a native window with the title in its title bar, draws
+`render` below it with 16 points of padding, and scrolls what doesn't fit.
+Opening a window that's already open brings it forward.
+`sidedoor.closeWindow(key)` closes it, as does its close button, after which
+the keyboard goes back to the app you were in.
+
+A window renders only while it's open, and its component state goes when it
+closes. Keep anything that should last in `useStorage` or a store. Windows
+stay open when the plugin reloads.
 
 ## Elements
 
@@ -223,6 +256,8 @@ reordered.
 - `sidedoor.openUrl(url)`: opens a URL.
 - `sidedoor.open(path)`: opens a file.
 - `sidedoor.copy(text)`: copies text.
+- `sidedoor.openWindow(key)` and `sidedoor.closeWindow(key)`: see
+  [Windows](#windows).
 - `sidedoor.notify({ title, body? })`: shows a banner in Notification
   Center, under the plugin's name. macOS asks once whether Sidedoor may
   send notifications.
@@ -249,6 +284,9 @@ test("the tile starts the timer", async () => {
 `mount(definition, { settings?, storage? })` returns:
 
 - `card` and `tile`: the rendered trees, and `text(surface?)`: their text.
+  A surface is `"card"`, `"tile"` or `"window:<key>"`.
+- `window(key)`: an open window's tree, and `closeWindow(key)`: its close
+  button. `sidedoor.openWindow` opens windows as it would in the app.
 - `find(label | match)`: an element by its `label` or `title` prop, else its
   text. It has `click()`, `change(value)` and `submit(text)`.
   `findAll(type)` lists every element of a type, e.g. `"Button"`.
@@ -276,6 +314,9 @@ string or `{"t": tag, "p": props, "c": children}`. After that it sends only
 what changed: `{"type":"patch","surface":"card","patches":[{"op":"props","path":[0,2],"props":{…}}]}`,
 where `op` is `replace` or `props`. A function prop travels as `{"$h": key}`.
 
+Open windows are surfaces too, named `window:<key>`.
+
 The app sends `event` (a handler key and a value), `card` (whether the card
-is open), `click`, `action` (a key from `actions`), `settings`, and
-`resync` if a patch doesn't fit its copy of the tree.
+is open), `window` (a key, and whether it opened or closed), `click`,
+`action` (a key from `actions`), `settings`, and `resync` if a patch
+doesn't fit its copy of the tree.

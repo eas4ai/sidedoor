@@ -105,3 +105,50 @@ test("state survives a reload as a snapshot", () => {
   reset();
   expect(renderSurfaces({ card: Widget }).card).toEqual([{ t: "div", p: {}, c: ["0 true"] }]);
 });
+
+test("windows render only while open", async () => {
+  let renders = 0;
+  const notes = definePlugin({
+    name: "Notes",
+    card: () => <Button label="More" on_click={() => sidedoor.openWindow("all")} />,
+    windows: {
+      all: {
+        title: "All Notes",
+        width: 520,
+        render({ settings }) {
+          renders++;
+          const [count, setCount] = useState(0);
+          return (
+            <div>
+              <Button label={`Seen ${count}`} on_click={() => setCount(count + 1)} />
+              <Button label="Done" on_click={() => sidedoor.closeWindow("all")} />
+              {Object.keys(settings).length}
+            </div>
+          );
+        },
+      },
+    },
+  });
+  const plugin = mount(notes);
+  expect(plugin.window("all")).toBeUndefined();
+  expect(renders).toBe(0);
+
+  await plugin.press("More");
+  await plugin.settle();
+  expect(plugin.find("Seen 0", "window:all").type).toBe("Button");
+  await plugin.press("Seen 0", "window:all");
+  expect(plugin.find("Seen 1", "window:all").type).toBe("Button");
+
+  await plugin.press("Done", "window:all");
+  await plugin.settle();
+  expect(plugin.window("all")).toBeUndefined();
+
+  // Reopened, it starts over: its state went with it.
+  await plugin.press("More");
+  await plugin.settle();
+  expect(plugin.find("Seen 0", "window:all").type).toBe("Button");
+  expect(plugin.text("window:all")).toBe("0");
+  expect(plugin.sent.find((message) => message.type === "manifest")).toMatchObject({
+    windows: [{ key: "all", title: "All Notes", width: 520, height: 360 }],
+  });
+});

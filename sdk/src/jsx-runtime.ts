@@ -31,9 +31,10 @@ export declare namespace JSX {
   interface IntrinsicAttributes {
     key?: string | number;
   }
+  // Intrinsic elements don't get `IntrinsicAttributes`, so each takes `key`.
   interface IntrinsicElements {
-    div: DivProps;
-    svg: SvgProps;
-    img: ImgProps;
+    div: DivProps & IntrinsicAttributes;
+    svg: SvgProps & IntrinsicAttributes;
+    img: ImgProps & IntrinsicAttributes;
   }
 }

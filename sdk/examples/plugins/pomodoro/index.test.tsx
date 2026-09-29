@@ -35,3 +35,13 @@ test("Reset Timer in the menu puts the time back", async () => {
   await plugin.action("reset");
   expect(plugin.text()).toContain("25:00");
 });
+
+test("the history window adds up finished sessions", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const plugin = mount(pomodoro, { storage: { history: { [today]: 75 } } });
+  await plugin.action("history");
+  await plugin.settle();
+  expect(plugin.text("window:history")).toContain("1 h 15 min");
+  await plugin.press("Clear History", "window:history");
+  expect(plugin.text("window:history")).toContain("None yet");
+});

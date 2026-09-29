@@ -26,6 +26,8 @@ export type HostMessage =
   | { type: "click" }
   /** A command from the item's context menu. */
   | { type: "action"; key: string }
+  /** One of the plugin's windows opened or closed. */
+  | { type: "window"; key: string; open: boolean }
   | { type: "settings"; values: Record<string, unknown> }
   /** The app lost track of a surface; send everything again. */
   | { type: "resync" }
@@ -41,6 +43,8 @@ export type PluginMessage =
   | { type: "open_path"; path: string }
   | { type: "copy"; text: string }
   | { type: "notify"; title: string; body: string }
+  | { type: "open_window"; key: string }
+  | { type: "close_window"; key: string }
   | { type: "log"; line: string }
   | { type: "error"; message: string }
   /** To the supervisor only, in reply to `snapshot`. */
@@ -152,6 +156,9 @@ export const sidedoor = {
   openUrl: (url: string) => send({ type: "open_url", url }),
   open: (path: string) => send({ type: "open_path", path }),
   copy: (text: string) => send({ type: "copy", text }),
+  /** Opens one of the windows declared in `definePlugin`, or brings it forward. */
+  openWindow: (key: string) => send({ type: "open_window", key }),
+  closeWindow: (key: string) => send({ type: "close_window", key }),
   /** Shows a banner in Notification Center, under the plugin's name. */
   notify: ({ title, body = "" }: { title: string; body?: string }) =>
     send({ type: "notify", title, body }),
@@ -201,6 +208,17 @@ export type Surface<S extends SettingDefinitions = SettingDefinitions> = (
   context: PluginContext<S>,
 ) => Child;
 
+/** A window the plugin can open with `sidedoor.openWindow(key)`. */
+export interface WindowDefinition<S extends SettingDefinitions = SettingDefinitions> {
+  /** Shown in the title bar. */
+  title: string;
+  /** In points; 480 × 360 by default. The user can resize it. */
+  width?: number;
+  height?: number;
+  /** Drawn while the window is open, below its title bar. */
+  render: Surface<S>;
+}
+
 /** A command in the dock item's context menu. */
 export interface PluginAction<S extends SettingDefinitions = SettingDefinitions> {
   title: string;
@@ -229,6 +247,8 @@ export interface PluginDefinition<S extends SettingDefinitions = SettingDefiniti
   onClick?: (context: PluginContext<S>) => void;
   /** Commands for the item's context menu, by key. */
   actions?: Record<string, PluginAction<S>>;
+  /** Windows for more room than the card has, by key. */
+  windows?: Record<string, WindowDefinition<S>>;
 }
 
 /** What the app learns about a plugin when it starts. */
@@ -240,6 +260,7 @@ export interface Manifest {
   settings: Array<{ key: string } & SettingDefinition>;
   clickable: boolean;
   actions: Array<{ key: string; title: string }>;
+  windows: Array<{ key: string; title: string; width: number; height: number }>;
 }
 
 function defaultOf(setting: SettingDefinition): unknown {
@@ -275,6 +296,12 @@ export function describe<S extends SettingDefinitions>(
       actions: Object.entries(definition.actions ?? {}).map(([key, action]) => ({
         key,
         title: action.title,
+      })),
+      windows: Object.entries(definition.windows ?? {}).map(([key, window]) => ({
+        key,
+        title: window.title,
+        width: window.width ?? 480,
+        height: window.height ?? 360,
       })),
     },
     defaults: Object.fromEntries(settings.map(([key, setting]) => [key, defaultOf(setting)])),
@@ -329,8 +356,18 @@ export function start(definition: PluginDefinition, bridge: Bridge, options: Sta
 
   send({ type: "manifest", ...manifest });
 
-  const surfaces: Record<string, Component<any>> = { card: definition.card };
-  if (definition.tile) surfaces.tile = definition.tile;
+  const base: Record<string, Component<any>> = { card: definition.card };
+  if (definition.tile) base.tile = definition.tile;
+  /** Windows on screen; only they are rendered. */
+  const openWindows = new Set<string>();
+  const surfaces = () => {
+    const all = { ...base };
+    for (const key of openWindows) {
+      const window = definition.windows?.[key];
+      if (window) all[`window:${key}`] = window.render;
+    }
+    return all;
+  };
   const context: PluginContext = {
     get settings() {
       return settingValues() as PluginContext["settings"];
@@ -340,7 +377,7 @@ export function start(definition: PluginDefinition, bridge: Bridge, options: Sta
 
   const render = () => {
     try {
-      const output = renderSurfaces(surfaces, context as unknown as Record<string, unknown>);
+      const output = renderSurfaces(surfaces(), context as unknown as Record<string, unknown>);
       for (const [surface, tree] of Object.entries(output)) {
         const previous = sent.get(surface);
         sent.set(surface, tree);
@@ -382,6 +419,15 @@ export function start(definition: PluginDefinition, bridge: Bridge, options: Sta
       }
       case "card":
         session.cardOpen = message.open;
+        break;
+      case "window":
+        if (message.open) {
+          openWindows.add(message.key);
+        } else {
+          openWindows.delete(message.key);
+          // Reopened, it is sent whole again.
+          sent.delete(`window:${message.key}`);
+        }
         break;
       case "settings":
         session.saved = message.values;

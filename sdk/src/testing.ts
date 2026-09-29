@@ -38,7 +38,8 @@ export interface Found {
   submit(value: string): Promise<void>;
 }
 
-type Surface = "card" | "tile";
+/** `"card"`, `"tile"` or `"window:<key>"`. */
+type Surface = "card" | "tile" | `window:${string}`;
 
 /** Lets the plugin re-render and run its effects. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -94,6 +95,12 @@ export function mount(definition: PluginDefinition<any>, options: MountOptions =
     {
       send(message) {
         sent.push(message);
+        // Answer as the app would when a window opens or closes.
+        if (message.type === "open_window" || message.type === "close_window") {
+          const open = message.type === "open_window";
+          if (!open) delete trees[`window:${message.key}`];
+          queueMicrotask(() => receive({ type: "window", key: message.key, open }));
+        }
         if (message.type === "render") {
           trees[message.surface as Surface] = structuredClone(message.tree);
         } else if (message.type === "patch") {
@@ -155,6 +162,13 @@ export function mount(definition: PluginDefinition<any>, options: MountOptions =
     /** The dock tile, if the plugin draws one. */
     get tile(): Node[] | undefined {
       return trees.tile;
+    },
+    /** What an open window shows, by its key; `undefined` while closed. */
+    window: (key: string): Node[] | undefined => trees[`window:${key}`],
+    /** Closes a window as its close button would. */
+    closeWindow: async (key: string) => {
+      delete trees[`window:${key}`];
+      await deliver({ type: "window", key, open: false });
     },
     /** Everything the plugin sent, oldest first. */
     sent,

@@ -10,6 +10,7 @@ export type {
   SettingDefinition,
   SettingValue,
   SettingValues,
+  WindowDefinition,
 } from "./host";
 export type { Patch, Snapshot } from "./runtime";
 export type { Storage } from "./storage";

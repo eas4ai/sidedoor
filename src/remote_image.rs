@@ -142,7 +142,10 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0; 1024];
             let _ = stream.read(&mut request);
-            let head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n", body.len());
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
             stream.write_all(head.as_bytes()).unwrap();
             stream.write_all(body).unwrap();
         });
@@ -168,6 +171,9 @@ mod tests {
     fn only_web_addresses_are_remote() {
         assert!(is_remote("https://example.com/a.png"));
         assert!(!is_remote("/Users/me/a.png"));
-        assert_ne!(cached_path("https://a/1.png"), cached_path("https://a/2.png"));
+        assert_ne!(
+            cached_path("https://a/1.png"),
+            cached_path("https://a/2.png")
+        );
     }
 }

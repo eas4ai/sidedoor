@@ -34,6 +34,8 @@ pub struct Manifest {
     pub clickable: bool,
     /// Commands for the item's context menu.
     pub actions: Vec<PluginAction>,
+    /// Windows the plugin can open, by key.
+    pub windows: Vec<PluginWindow>,
     pub dir: PathBuf,
     /// The entry file, relative to `dir`.
     pub main: PathBuf,
@@ -93,6 +95,24 @@ pub struct PluginAction {
     pub title: String,
 }
 
+/// A window a plugin declares, opened with `sidedoor.openWindow(key)`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct PluginWindow {
+    pub key: String,
+    pub title: String,
+    #[serde(default = "default_window_width")]
+    pub width: f64,
+    #[serde(default = "default_window_height")]
+    pub height: f64,
+}
+
+fn default_window_width() -> f64 {
+    480.0
+}
+fn default_window_height() -> f64 {
+    360.0
+}
+
 /// What a plugin tells the host about itself when it starts, from its
 /// `definePlugin` call.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -110,6 +130,8 @@ pub struct Described {
     pub clickable: bool,
     #[serde(default)]
     pub actions: Vec<PluginAction>,
+    #[serde(default)]
+    pub windows: Vec<PluginWindow>,
 }
 
 fn default_icon() -> String {
@@ -148,6 +170,7 @@ impl Manifest {
             settings: Vec::new(),
             clickable: false,
             actions: Vec::new(),
+            windows: Vec::new(),
             dir: dir.to_path_buf(),
             main,
         })
@@ -164,6 +187,15 @@ impl Manifest {
         self.settings = described.settings;
         self.clickable = described.clickable;
         self.actions = described.actions;
+        self.windows = described
+            .windows
+            .into_iter()
+            .map(|window| PluginWindow {
+                width: window.width.clamp(280.0, 1200.0),
+                height: window.height.clamp(200.0, 900.0),
+                ..window
+            })
+            .collect();
     }
 
     /// The asset path of the plugin's icon.
@@ -333,6 +365,12 @@ pub enum PluginMessage {
         #[serde(default)]
         body: String,
     },
+    OpenWindow {
+        key: String,
+    },
+    CloseWindow {
+        key: String,
+    },
     /// A `console.log` line.
     Log {
         line: String,
@@ -361,6 +399,11 @@ pub enum HostMessage {
     /// A command from the item's context menu.
     Action {
         key: String,
+    },
+    /// One of the plugin's windows opened or closed.
+    Window {
+        key: String,
+        open: bool,
     },
     Settings {
         values: Map<String, Value>,
@@ -887,6 +930,7 @@ mod tests {
         let json = r#"{"type":"manifest","plugin":"pomodoro","name":"Pomodoro","icon":"timer",
             "width":9000,"height":null,"clickable":true,
             "actions":[{"key":"skip","title":"Skip Break"}],
+            "windows":[{"key":"history","title":"History","width":50}],
             "settings":[{"key":"sound","title":"Sound","type":"toggle"},
                         {"key":"mode","title":"Mode","type":"choice","options":["focus","break"]}]}"#;
         let PluginMessage::Manifest(described) = serde_json::from_str(json).unwrap() else {
@@ -901,6 +945,7 @@ mod tests {
             settings: Vec::new(),
             clickable: false,
             actions: Vec::new(),
+            windows: Vec::new(),
             dir: PathBuf::from("/plugins/pomodoro"),
             main: PathBuf::from("index.tsx"),
         };
@@ -910,6 +955,10 @@ mod tests {
         assert_eq!(manifest.height, None);
         assert!(manifest.clickable);
         assert_eq!(manifest.actions[0].title, "Skip Break");
+        assert_eq!(
+            (manifest.windows[0].width, manifest.windows[0].height),
+            (280.0, 360.0)
+        );
 
         let saved = Map::from_iter([("mode".to_string(), Value::from("break"))]);
         let values = manifest.settings_with(Some(&saved));

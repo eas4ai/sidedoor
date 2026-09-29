@@ -13,6 +13,7 @@ mod notifications;
 mod platform;
 mod plugin;
 mod plugin_ui;
+mod plugin_window;
 mod remote_image;
 mod settings_plugins;
 mod settings_window;
@@ -43,7 +44,7 @@ use objc2_app_kit::{NSView, NSWindow};
 use platform::Platform;
 use settings_window::{SettingsEvent, SettingsWindow};
 use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use views::{
     AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem, OpenSettings,
     RemoveItem, RemoveShortcut, RevealItem, RunPluginAction,
@@ -400,6 +401,117 @@ fn open_clipboard_history(
     Ok(())
 }
 
+/// Plugin windows on screen, by plugin id and window key, with the app
+/// that had focus before each opened.
+type PluginWindows = Rc<RefCell<HashMap<(String, String), (AnyWindowHandle, Option<i32>)>>>;
+
+/// Removes a plugin window; the keyboard goes back to the app before it.
+fn close_plugin_window(windows: &PluginWindows, id: &(String, String), cx: &mut App) {
+    let Some((handle, previous)) = windows.borrow_mut().remove(id) else {
+        return;
+    };
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .ok();
+    if let Some(pid) = previous {
+        macos::activate_app(pid);
+    }
+}
+
+fn open_plugin_window(
+    dock: &Entity<Dock>,
+    windows: &PluginWindows,
+    plugin: &str,
+    key: &str,
+    cx: &mut App,
+) -> Result<(), String> {
+    let id = (plugin.to_string(), key.to_string());
+    let existing = windows.borrow().get(&id).map(|(handle, _)| *handle);
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        cx.activate(true);
+        return Ok(());
+    }
+    let declared = dock
+        .read(cx)
+        .items
+        .iter()
+        .find_map(|item| match &item.kind {
+            dock::ItemKind::Plugin(manifest) if manifest.id == plugin => manifest
+                .windows
+                .iter()
+                .find(|window| window.key == key)
+                .cloned(),
+            _ => None,
+        });
+    let declared = declared.ok_or("the plugin declares no such window")?;
+
+    let previous = macos::frontmost_app();
+    cx.activate(true);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(declared.width as f32), px(declared.height as f32)),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some(declared.title.clone().into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(14.0), px(plugin_window::TITLE_BAR / 2.0 - 7.0))),
+        }),
+        window_min_size: Some(size(px(280.0), px(200.0))),
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| {
+            plugin_window::PluginWindow::new(
+                dock.clone(),
+                plugin.to_string().into(),
+                key.to_string().into(),
+                declared.title.clone().into(),
+                window,
+                cx,
+            )
+        })
+    })
+    .map_err(|err| err.to_string())?;
+    handle
+        .update(cx, |_, window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                root.style()
+                    .refine(&StyleRefinement::default().bg(transparent_black()));
+            });
+            if let Some(native) = macos::ns_window(window) {
+                macos::add_window_material(&native);
+                if !cx.reduce_motion() {
+                    macos::fade_in(&native);
+                }
+            }
+        })
+        .ok();
+
+    let (dock, closing, id_for_close) = (dock.clone(), windows.clone(), id.clone());
+    cx.subscribe(&view, move |_, _: &plugin_window::PluginWindowEvent, cx| {
+        // The close button already closes the window.
+        let previous = closing
+            .borrow_mut()
+            .remove(&id_for_close)
+            .and_then(|(_, previous)| previous);
+        let (plugin, key) = &id_for_close;
+        dock.update(cx, |dock, _| dock.plugin_window_closed(plugin, key));
+        if let Some(pid) = previous {
+            macos::activate_app(pid);
+        }
+    })
+    .detach();
+    windows.borrow_mut().insert(id, (handle, previous));
+    Ok(())
+}
+
 /// The Settings window, while it is open, and the app that had focus.
 #[derive(Default)]
 struct SettingsState {
@@ -727,6 +839,7 @@ fn run(cx: &mut App) -> Result<(), String> {
     register_shortcuts(&dock, &shortcuts, cx);
 
     let history_window = Rc::new(RefCell::new(HistoryWindow::default()));
+    let plugin_windows = PluginWindows::default();
     let opener = dock.clone();
     let registry = shortcuts.clone();
     cx.subscribe(&dock, move |_, event, cx| match event {
@@ -736,6 +849,14 @@ fn run(cx: &mut App) -> Result<(), String> {
             }
         }
         DockEvent::ShortcutsChanged => register_shortcuts(&opener, &registry, cx),
+        DockEvent::OpenPluginWindow { plugin, key } => {
+            if let Err(err) = open_plugin_window(&opener, &plugin_windows, plugin, key, cx) {
+                eprintln!("sidedoor: couldn't open {plugin}'s {key} window: {err}");
+            }
+        }
+        DockEvent::ClosePluginWindow { plugin, key } => {
+            close_plugin_window(&plugin_windows, &(plugin.clone(), key.clone()), cx);
+        }
     })
     .detach();
 
