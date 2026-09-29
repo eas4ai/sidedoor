@@ -214,6 +214,7 @@ pub(super) fn tooltip_text(item: &dock::DockItem) -> Option<String> {
 
 /// Width of a tooltip label as the card window will draw it.
 pub(super) fn measure(panel: &Panel, label: &str, cx: &mut App) -> f64 {
+    let family = crate::ui::theme::ui_font(cx);
     panel
         .handle
         .update(cx, |_, window, _| {
@@ -221,11 +222,7 @@ pub(super) fn measure(panel: &Panel, label: &str, cx: &mut App) -> f64 {
                 len: label.len(),
                 font: gpui_kit::Font {
                     weight: FontWeight::NORMAL,
-                    ..font(if cfg!(windows) {
-                        "Segoe UI"
-                    } else {
-                        ".SystemUIFont"
-                    })
+                    ..font(family)
                 },
                 color: gpui_kit::black(),
                 background_color: None,
@@ -308,7 +305,7 @@ pub(super) fn open_clipboard_history(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("Clipboard History".into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: Some(point(
                 px(18.0),
                 px(clipboard_window::TOOLBAR_HEIGHT / 2.0 - 7.0),
@@ -334,8 +331,8 @@ pub(super) fn open_clipboard_history(
                     native::fade_in(&native);
                 }
             }
-            // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            // GPUI's application-level activation is a no-op on Windows and X11.
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();
@@ -423,7 +420,7 @@ pub(super) fn open_plugin_window(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some(declared.title.clone().into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: Some(point(px(14.0), px(plugin_window::TITLE_BAR / 2.0 - 7.0))),
         }),
         window_min_size: Some(size(px(280.0), px(200.0))),
@@ -455,8 +452,8 @@ pub(super) fn open_plugin_window(
                     native::fade_in(&native);
                 }
             }
-            // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            // GPUI's application-level activation is a no-op on Windows and X11.
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();
@@ -512,7 +509,7 @@ pub(super) fn open_settings(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some(settings_window::Tab::General.title().into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: None,
         }),
         is_resizable: false,
@@ -536,8 +533,8 @@ pub(super) fn open_settings(
                     native::fade_in(&native);
                 }
             }
-            // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            // GPUI's application-level activation is a no-op on Windows and X11.
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();

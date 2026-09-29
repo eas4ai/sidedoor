@@ -36,7 +36,9 @@ pub fn migrate_old_name() {}
 pub fn support_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     return windows_data_dir("APPDATA").join("Sidedoor");
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    return xdg_dir("XDG_DATA_HOME", ".local/share").join("sidedoor");
+    #[cfg(target_os = "macos")]
     std::env::var_os("HOME")
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
         .join("Library/Application Support/Sidedoor")
@@ -45,10 +47,25 @@ pub fn support_dir() -> PathBuf {
 pub fn cache_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     return windows_data_dir("LOCALAPPDATA").join("Sidedoor/Cache");
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    return xdg_dir("XDG_CACHE_HOME", ".cache").join("sidedoor");
+    #[cfg(target_os = "macos")]
     std::env::var_os("HOME")
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
         .join("Library/Caches/Sidedoor")
+}
+
+/// An XDG base directory, or its documented default under `$HOME`.
+#[cfg(target_os = "linux")]
+pub fn xdg_dir(variable: &str, default: &str) -> PathBuf {
+    std::env::var_os(variable)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map_or_else(|| PathBuf::from("."), PathBuf::from)
+                .join(default)
+        })
 }
 
 #[cfg(target_os = "windows")]
@@ -67,17 +84,17 @@ fn windows_data_dir(variable: &str) -> PathBuf {
         })
 }
 
-/// Read-only assets shipped alongside the executable on Windows, or in
-/// Contents/Resources on macOS. Development builds use repository assets.
+/// Read-only assets shipped alongside the executable on Windows and Linux,
+/// or in Contents/Resources on macOS. Development builds use repository assets.
 pub fn bundled_resource(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     bundled_resource_at(&exe, name).filter(|path| path.is_dir())
 }
 
 fn bundled_resource_at(exe: &Path, name: &str) -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let resources = exe.parent()?.join("resources");
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let resources = exe.parent()?.parent()?.join("Resources");
     Some(resources.join(name))
 }

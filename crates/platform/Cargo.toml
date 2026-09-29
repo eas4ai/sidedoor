@@ -41,3 +41,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6"
+arboard = "3.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
+x11rb = { version = "0.13", features = ["randr", "shape", "xfixes", "xinput"] }
+resvg = { version = "0.45", default-features = false }
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }

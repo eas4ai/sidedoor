@@ -98,7 +98,7 @@ pub(super) fn open_shortcut_recorder(
         ))),
         titlebar: Some(TitlebarOptions {
             title: Some("Assign Shortcut".into()),
-            appears_transparent: cfg!(target_os = "macos"),
+            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
             traffic_light_position: Some(point(px(14.0), px(14.0))),
         }),
         is_resizable: false,
@@ -123,7 +123,7 @@ pub(super) fn open_shortcut_recorder(
                 }
             }
             // GPUI's application-level activation is a no-op on Windows.
-            #[cfg(target_os = "windows")]
+            #[cfg(not(target_os = "macos"))]
             window.activate_window();
         })
         .ok();

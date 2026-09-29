@@ -2,12 +2,12 @@
 
 use crate::app::dock::{Dock, DockItem, ItemKind};
 use crate::app::host::AppInfo;
+use crate::ui::menu::ContextMenu;
 use crate::ui::theme::{Palette, text};
 use domain::geometry::{
     self as geometry, CardPlacement, DOCK_PADDING, DOCK_RADIUS, Edge, PathStep, SLOT,
 };
 use domain::motion;
-use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::{
     Action, Animation, AnimationExt as _, AnyElement, App, AppContext as _, Bounds, Context, Div,
     Entity, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton,

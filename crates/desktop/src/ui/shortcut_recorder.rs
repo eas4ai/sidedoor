@@ -12,7 +12,9 @@ use gpui_kit::{
 use std::{path::PathBuf, rc::Rc};
 
 pub const CONTEXT: &str = "ShortcutRecorder";
-pub const WINDOW_SIZE: (f32, f32) = (400.0, 290.0);
+/// Room above the content for the traffic lights, where they are inset.
+const TOP: f32 = 18.0 + crate::ui::chrome::title_strip(22.0);
+pub const WINDOW_SIZE: (f32, f32) = (400.0, 268.0 + crate::ui::chrome::title_strip(22.0));
 
 /// What the recorder decided.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,6 +279,8 @@ impl Render for ShortcutRecorder {
                 .child("Press Return to save it."),
             (None, None) => div().text_color(palette.secondary).child(if cfg!(windows) {
                 "Use Ctrl, Alt or Win with any key, or an F-key on its own."
+            } else if cfg!(target_os = "linux") {
+                "Use Ctrl, Alt or Super with any key, or an F-key on its own."
             } else {
                 "Use ⌘, ⌥ or ⌃ with any key, or an F-key on its own."
             }),
@@ -295,7 +299,7 @@ impl Render for ShortcutRecorder {
             .flex_col()
             .gap(px(14.0))
             .px(px(20.0))
-            .pt(px(40.0))
+            .pt(px(TOP))
             .pb(px(18.0))
             .text_color(palette.label)
             .text_size(px(text::BODY))

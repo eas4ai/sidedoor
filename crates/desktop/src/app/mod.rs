@@ -35,6 +35,7 @@ use windows::*;
 
 fn init(cx: &mut App) -> Result<(), String> {
     gpui_kit::init(cx);
+    crate::ui::theme::install_ui_font(cx);
     native::set_accessory_policy();
 
     let platform: Rc<dyn Host> = Rc::new(platform::NativeHost::default());
@@ -184,6 +185,17 @@ fn init(cx: &mut App) -> Result<(), String> {
         }
     });
 
+    // X11 has no run loop to hang native animations and key grabs on, so
+    // a foreground task drives them.
+    #[cfg(target_os = "linux")]
+    cx.spawn(async move |cx| {
+        loop {
+            let delay = native::pump();
+            cx.background_executor().timer(delay).await;
+        }
+    })
+    .detach();
+
     let mut panels = Panels {
         dock: dock_panel,
         card: card_panel,
@@ -214,6 +226,8 @@ fn relaunch() {
 }
 
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    ::platform::linux::prefer_x11();
     #[cfg(target_os = "windows")]
     native::wait_for_previous_process();
     #[cfg(target_os = "windows")]

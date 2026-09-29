@@ -7,7 +7,7 @@ use domain::{
     geometry::{Point, Screen},
 };
 use plugin_host::{Connection, Installer, Manifest, Staged};
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(not(target_os = "windows"), test))]
 use std::path::PathBuf;
 use std::{collections::HashSet, io, path::Path, sync::Arc};
 pub trait Host: ::platform::Platform {
@@ -87,7 +87,7 @@ impl ::platform::Platform for NativeHost {
 }
 impl Host for NativeHost {
     fn plugin_installer(&self) -> Arc<dyn Installer> {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "windows"))]
         let bun = bun().cloned();
         #[cfg(target_os = "windows")]
         let bun = plugin_host::find_bun();
@@ -126,12 +126,12 @@ impl Host for NativeHost {
     fn save_history(&self, history: &History) -> io::Result<()> {
         services::storage::save_history(history)
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "windows"))]
     fn plugins(&self) -> Vec<plugin_host::Manifest> {
         plugin_host::discover(&plugin_host::plugins_dir())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "windows"))]
     fn start_plugin(
         &self,
         manifest: &plugin_host::Manifest,
@@ -143,7 +143,7 @@ impl Host for NativeHost {
             .map_err(|err| format!("Couldn't start {}: {err}", manifest.name))
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "windows"))]
     fn create_plugin(&self, name: &str) -> Result<plugin_host::Manifest, String> {
         let dir = plugin_host::plugins_dir();
         std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
@@ -173,7 +173,7 @@ impl Host for NativeHost {
     }
 }
 /// Bun, looked up once; finding it can mean asking a login shell.
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "windows"))]
 fn bun() -> Option<&'static PathBuf> {
     static BUN: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     BUN.get_or_init(plugin_host::find_bun).as_ref()

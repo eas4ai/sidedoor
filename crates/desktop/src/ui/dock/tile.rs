@@ -46,6 +46,7 @@ pub(super) fn slot(
     let drop_slot = dock_entity.clone();
     let drop_paths = dock_entity.clone();
     let press = view.clone();
+    let menu_dock = dock_entity.clone();
 
     // Items travel in from the screen edge and fade up as they arrive.
     let travel = (1.0 - motion.arrival) * motion::ICON_TRAVEL;
@@ -86,7 +87,7 @@ pub(super) fn slot(
         .on_mouse_down(
             MouseButton::Right,
             move |event: &MouseDownEvent, window, cx| {
-                let mut menu = NativeMenu::new();
+                let mut menu = ContextMenu::new();
                 if is_app {
                     menu = menu
                         .menu("Open", Box::new(OpenItem { id: id.clone() }))
@@ -121,7 +122,7 @@ pub(super) fn slot(
                     .menu("Remove from Dock", Box::new(RemoveItem { id: id.clone() }))
                     .separator()
                     .menu("Dock Settings…", Box::new(OpenSettings))
-                    .show(event.position, window, cx);
+                    .show(event.position, &menu_dock, window, cx);
                 cx.stop_propagation();
             },
         )

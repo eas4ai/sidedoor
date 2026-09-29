@@ -6,6 +6,10 @@
 
 use std::fmt;
 
+/// Whether keys are named as on a PC keyboard (Ctrl+Alt+V) rather than
+/// with the Mac symbols (⌃⌥V). Ctrl is then also the primary modifier.
+pub const PC_KEYS: bool = !cfg!(target_os = "macos");
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Shortcut {
     pub control: bool,
@@ -30,6 +34,8 @@ impl fmt::Display for Problem {
             Self::NeedsModifier => {
                 if cfg!(windows) {
                     "Add Ctrl, Alt or Win, or use an F-key on its own."
+                } else if cfg!(target_os = "linux") {
+                    "Add Ctrl, Alt or Super, or use an F-key on its own."
                 } else {
                     "Add ⌘, ⌥ or ⌃, or use an F-key on its own."
                 }
@@ -38,6 +44,8 @@ impl fmt::Display for Problem {
             Self::ReservedBySystem => {
                 if cfg!(windows) {
                     "Windows already uses this shortcut."
+                } else if cfg!(target_os = "linux") {
+                    "The system already uses this shortcut."
                 } else {
                     "macOS already uses this shortcut."
                 }
@@ -47,7 +55,7 @@ impl fmt::Display for Problem {
 }
 
 /// Shortcuts macOS keeps for itself or that every app relies on.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 const RESERVED: &[&str] = &[
     "cmd-space",
     "ctrl-space",
@@ -67,6 +75,34 @@ const RESERVED: &[&str] = &[
     "shift-cmd-4",
     "shift-cmd-5",
     "alt-cmd-escape",
+];
+
+/// Shortcuts Linux desktops (GNOME, KDE, Xfce) keep for themselves or
+/// that every app relies on.
+#[cfg(target_os = "linux")]
+const RESERVED: &[&str] = &[
+    "alt-tab",
+    "alt-shift-tab",
+    "alt-f2",
+    "alt-f4",
+    "ctrl-alt-delete",
+    "ctrl-alt-t",
+    "ctrl-alt-left",
+    "ctrl-alt-right",
+    "cmd-a",
+    "cmd-d",
+    "cmd-l",
+    "cmd-v",
+    "cmd-tab",
+    "cmd-space",
+    "ctrl-c",
+    "ctrl-v",
+    "ctrl-x",
+    "ctrl-z",
+    "ctrl-a",
+    "ctrl-s",
+    "ctrl-w",
+    "ctrl-q",
 ];
 
 #[cfg(target_os = "windows")]
@@ -147,10 +183,19 @@ impl Shortcut {
     /// One symbol per keycap, as macOS menus show them: ⌃ ⌥ ⇧ ⌘ then the key.
     pub fn symbols(&self) -> Vec<String> {
         let mut symbols: Vec<String> = [
-            (self.control, if cfg!(windows) { "Ctrl" } else { "⌃" }),
-            (self.option, if cfg!(windows) { "Alt" } else { "⌥" }),
-            (self.shift, if cfg!(windows) { "Shift" } else { "⇧" }),
-            (self.command, if cfg!(windows) { "Win" } else { "⌘" }),
+            (self.control, if PC_KEYS { "Ctrl" } else { "⌃" }),
+            (self.option, if PC_KEYS { "Alt" } else { "⌥" }),
+            (self.shift, if PC_KEYS { "Shift" } else { "⇧" }),
+            (
+                self.command,
+                if cfg!(windows) {
+                    "Win"
+                } else if PC_KEYS {
+                    "Super"
+                } else {
+                    "⌘"
+                },
+            ),
         ]
         .iter()
         .filter(|(on, _)| *on)
@@ -204,7 +249,7 @@ impl Shortcut {
 
 impl fmt::Display for Shortcut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.symbols().join(if cfg!(windows) { "+" } else { "" }))
+        f.write_str(&self.symbols().join(if PC_KEYS { "+" } else { "" }))
     }
 }
 
@@ -235,7 +280,7 @@ fn key_symbol(key: &str) -> String {
 }
 
 /// Virtual key codes (kVK_*) for the keys GPUI names.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn key_code(key: &str) -> Option<u32> {
     let code = match key {
         "a" => 0x00,
@@ -324,6 +369,40 @@ fn key_code(key: &str) -> Option<u32> {
     Some(code)
 }
 
+/// X keysyms: the key server-side grabs resolve through the keymap.
+#[cfg(any(target_os = "linux", test))]
+fn x11_keysym(key: &str) -> Option<u32> {
+    if let Some(number) = function_key_number(key) {
+        return Some(0xffbe + number - 1);
+    }
+    if key.len() == 1 && key.as_bytes()[0].is_ascii_graphic() {
+        // Latin-1 keysyms equal their code points; letters use lowercase.
+        return Some(u32::from(key.as_bytes()[0].to_ascii_lowercase()));
+    }
+    Some(match key {
+        "space" => 0x0020,
+        "backspace" => 0xff08,
+        "tab" => 0xff09,
+        "enter" => 0xff0d,
+        "escape" => 0xff1b,
+        "home" => 0xff50,
+        "left" => 0xff51,
+        "up" => 0xff52,
+        "right" => 0xff53,
+        "down" => 0xff54,
+        "pageup" => 0xff55,
+        "pagedown" => 0xff56,
+        "end" => 0xff57,
+        "delete" => 0xffff,
+        _ => return None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn key_code(key: &str) -> Option<u32> {
+    x11_keysym(key)
+}
+
 // RegisterHotKey uses virtual keys, not Carbon's physical key codes.
 #[cfg(target_os = "windows")]
 fn key_code(key: &str) -> Option<u32> {
@@ -388,6 +467,17 @@ mod tests {
     }
 
     #[test]
+    fn x11_keysyms() {
+        assert_eq!(x11_keysym("v"), Some(0x76));
+        assert_eq!(x11_keysym("f1"), Some(0xffbe));
+        assert_eq!(x11_keysym("f12"), Some(0xffc9));
+        assert_eq!(x11_keysym("space"), Some(0x20));
+        assert_eq!(x11_keysym("left"), Some(0xff51));
+        assert_eq!(x11_keysym("-"), Some(0x2d));
+        assert_eq!(x11_keysym("§"), None);
+    }
+
+    #[test]
     #[cfg(target_os = "windows")]
     fn windows_shortcuts_use_native_labels_and_reservations() {
         assert_eq!(shortcut("ctrl-alt-v").to_string(), "Ctrl+Alt+V");
@@ -413,6 +503,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_shortcuts_use_pc_labels_and_reservations() {
+        assert_eq!(shortcut("ctrl-alt-v").to_string(), "Ctrl+Alt+V");
+        assert_eq!(shortcut("super-k").symbols(), ["Super", "K"]);
+        assert_eq!(shortcut("ctrl-alt-v").validate(), Ok(()));
+        assert_eq!(
+            shortcut("alt-f4").validate(),
+            Err(Problem::ReservedBySystem)
+        );
+    }
+
+    #[test]
     #[cfg(target_os = "macos")]
     fn shows_macos_symbols_in_menu_order() {
         assert_eq!(shortcut("cmd-alt-ctrl-shift-k").to_string(), "⌃⌥⇧⌘K");
@@ -428,7 +530,7 @@ mod tests {
         assert_eq!(shortcut("f6").validate(), Ok(()));
         assert_eq!(shortcut("ctrl-cmd-v").validate(), Ok(()));
         assert_eq!(
-            shortcut(if cfg!(windows) { "cmd-v" } else { "cmd-space" }).validate(),
+            shortcut(if PC_KEYS { "cmd-v" } else { "cmd-space" }).validate(),
             Err(Problem::ReservedBySystem)
         );
         assert_eq!(shortcut("cmd-§").validate(), Err(Problem::UnsupportedKey));
