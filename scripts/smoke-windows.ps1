@@ -21,6 +21,7 @@ public static class SidedoorSmoke {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int count);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Bounds bounds);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window, out Bounds bounds);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -35,6 +36,12 @@ public static class SidedoorSmoke {
         keybd_event(0x56, 0, 2, UIntPtr.Zero);
         keybd_event(0x12, 0, 2, UIntPtr.Zero);
         keybd_event(0x11, 0, 2, UIntPtr.Zero);
+    }
+    public static bool IsBorderless(IntPtr window) {
+        Bounds outer, client;
+        return GetWindowRect(window, out outer) && GetClientRect(window, out client)
+            && outer.Right - outer.Left == client.Right - client.Left
+            && outer.Bottom - outer.Top == client.Bottom - client.Top;
     }
     public static IntPtr[] Windows(uint pid, string title, string className) {
         var matches = new List<IntPtr>();
@@ -118,6 +125,7 @@ try {
         [SidedoorSmoke]::GetWindowRect($Window, [ref]$Bounds) | Out-Null
         $Width = $Bounds.Right - $Bounds.Left
         if ($Width -ge 50 -and $Width -le 150 -and $Bounds.Bottom - $Bounds.Top -gt $Width) {
+            if (-not [SidedoorSmoke]::IsBorderless($Window)) { throw "Dock has an unwanted native frame" }
             $Dock = $Bounds
             break
         }
@@ -129,6 +137,16 @@ try {
         [SidedoorSmoke]::SetCursorPos(($Dock.Left + $Dock.Right) / 2, $Dock.Bottom - $Widget[1] * $Scale) | Out-Null
         Start-Sleep -Seconds 2
         Save-Screen $Widget[0] $Screen
+        $CardFound = $false
+        foreach ($Window in [SidedoorSmoke]::Windows($Process.Id, "", [NullString]::Value)) {
+            if (-not [SidedoorSmoke]::IsWindowVisible($Window)) { continue }
+            [SidedoorSmoke]::GetWindowRect($Window, [ref]$Bounds) | Out-Null
+            if ($Bounds.Right - $Bounds.Left -gt 200) {
+                if (-not [SidedoorSmoke]::IsBorderless($Window)) { throw "$($Widget[0]) card has an unwanted native frame" }
+                $CardFound = $true
+            }
+        }
+        if (-not $CardFound) { throw "$($Widget[0]) card did not open on hover" }
     }
     [SidedoorSmoke]::SetCursorPos(10, 10) | Out-Null
     Start-Sleep -Seconds 1

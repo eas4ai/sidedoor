@@ -178,6 +178,17 @@ pub fn configure_panel(
 ) -> Option<NativeMaterial> {
     // SAFETY: GPUI owns the live HWND on this thread. Only presentation styles change.
     unsafe {
+        let mut content = RECT::default();
+        GetClientRect(window.hwnd, &mut content);
+        // GPUI creates popup HWNDs with WS_OVERLAPPED (zero). Windows gives
+        // those an invisible frame, which offsets and clips our shaped region.
+        // Use a real borderless popup and preserve the requested content size.
+        let panel_style = GetWindowLongPtrW(window.hwnd, GWL_STYLE) as u32;
+        SetWindowLongPtrW(
+            window.hwnd,
+            GWL_STYLE,
+            ((panel_style & !WS_OVERLAPPEDWINDOW) | WS_POPUP) as isize,
+        );
         let mut style = GetWindowLongPtrW(window.hwnd, GWL_EXSTYLE) as u32;
         style = (style | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
         if matches!(backdrop, Backdrop::Dock) {
@@ -189,9 +200,9 @@ pub fn configure_panel(
             HWND_TOPMOST,
             0,
             0,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            content.right - content.left,
+            content.bottom - content.top,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_FRAMECHANGED,
         );
         let mut bounds = RECT::default();
         GetClientRect(window.hwnd, &mut bounds);
@@ -229,6 +240,8 @@ pub fn has_material() -> bool {
 pub fn add_window_material(window: &NativeWindow) {
     set_material_hidden(window, false);
     unsafe {
+        let mut content_before = RECT::default();
+        GetClientRect(window.hwnd, &mut content_before);
         let style = GetWindowLongPtrW(window.hwnd, GWL_STYLE);
         SetWindowLongPtrW(window.hwnd, GWL_STYLE, style | WS_CAPTION as isize);
         SendMessageW(
@@ -251,6 +264,21 @@ pub fn add_window_material(window: &NativeWindow) {
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+        // A native caption takes space outside the declared plugin/window
+        // content. Keep the original content dimensions after adding it.
+        let mut content_after = RECT::default();
+        let mut outer = RECT::default();
+        GetClientRect(window.hwnd, &mut content_after);
+        GetWindowRect(window.hwnd, &mut outer);
+        SetWindowPos(
+            window.hwnd,
+            null_mut(),
+            0,
+            0,
+            outer.right - outer.left + content_before.right - content_after.right,
+            outer.bottom - outer.top + content_before.bottom - content_after.bottom,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
 }
