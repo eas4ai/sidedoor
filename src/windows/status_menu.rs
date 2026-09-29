@@ -37,6 +37,10 @@ impl StatusMenu {
         let restarted = unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) };
         let window = MessageWindow::new(move |message, _, event| {
             let hwnd = callback_handle.get();
+            if message == crate::windows::instance::OPEN_SETTINGS {
+                handler(MenuCommand::OpenSettings);
+                return Some(0);
+            }
             if restarted != 0 && message == restarted {
                 add_icon(hwnd);
                 return Some(0);

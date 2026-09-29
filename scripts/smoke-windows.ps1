@@ -110,6 +110,12 @@ try {
         Start-Sleep -Seconds 2
         Save-Screen $Widget[0] $Screen
     }
+    $Second = Start-Process "$App/Sidedoor.exe" -PassThru
+    if (-not $Second.WaitForExit(10000)) {
+        Stop-Process -Id $Second.Id -Force
+        throw "Launching again created a second app instance"
+    }
+    if ($Second.ExitCode -ne 0) { throw "Second launch failed" }
     Write-Host "Packaged app started, bundled Bun started, and Clipboard History opened and closed."
 } finally {
     # Stop only this smoke test's process tree, including its bundled Bun child.

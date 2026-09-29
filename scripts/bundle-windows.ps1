@@ -20,6 +20,9 @@ try {
     # Resolve the actual executable, not a package-manager shim.
     $Bun = (& bun -p "process.execPath").Trim()
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Bun)) { throw "Bun executable not found" }
+    if ((& $Bun -p "process.platform + '-' + process.arch").Trim() -ne "win32-x64") {
+        throw "This x64 package requires an x64 Windows Bun executable"
+    }
     Copy-Item $Bun "$App/bun.exe"
     foreach ($Name in @("weather", "clipboard", "stats")) {
         New-Item -ItemType Directory -Force "$App/resources/builtins/$Name" | Out-Null

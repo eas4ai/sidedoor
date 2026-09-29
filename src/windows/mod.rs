@@ -1,6 +1,7 @@
 //! Windows integrations. All native handles and callbacks stay on the UI thread.
 
 mod icons;
+pub mod instance;
 pub mod message_window;
 pub mod services;
 mod shortcuts;

@@ -965,6 +965,15 @@ fn relaunch() {
 fn main() {
     #[cfg(target_os = "windows")]
     native::wait_for_previous_process();
+    #[cfg(target_os = "windows")]
+    let _instance = match windows::instance::Instance::acquire() {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("sidedoor: couldn't acquire application instance: {error}");
+            return;
+        }
+    };
     // Every Lucide icon, so plugins can use any of them by name.
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)

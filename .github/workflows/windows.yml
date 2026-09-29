@@ -15,6 +15,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
+          # Ship the x64 baseline runtime so widgets also work on older CPUs.
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-windows-x64-baseline.zip
       - name: Rust toolchain
         run: |
           rustup update stable
