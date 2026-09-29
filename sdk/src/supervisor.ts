@@ -7,6 +7,10 @@
 //                {"type":"stop","plugin":id}
 //                {"plugin":id, …a HostMessage for that plugin}
 //   here → app:  {"plugin":id, …a PluginMessage}, and {"plugin":id,"type":"exited"}
+//
+// The app reloads a plugin by stopping and starting it. Before stopping, the
+// worker is asked for its hook and store state, and a start soon after hands
+// it to the new worker, so a save keeps what's on screen.
 
 interface Start {
   type: "start";
@@ -30,14 +34,29 @@ const { process } = globalThis as unknown as Scope;
 export {};
 
 const workers = new Map<string, Worker>();
+/** Plugins being stopped, with the state they left, if any. */
+const stopping = new Map<string, Promise<Kept | null>>();
+
+interface Kept {
+  state: unknown;
+  at: number;
+}
+
+/** How long a stopping worker gets to hand over its state. */
+const SNAPSHOT_WAIT = 300;
+/** A start later than this after a stop is a fresh start, not a reload. */
+const RELOAD_WINDOW = 5000;
 
 function out(message: Record<string, unknown>) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-function start(line: Start) {
+async function start(line: Start) {
   stop(line.plugin);
   const { plugin } = line;
+  const kept = await stopping.get(plugin);
+  stopping.delete(plugin);
+  const snapshot = kept && Date.now() - kept.at < RELOAD_WINDOW ? kept.state : null;
   const worker = new Worker(new URL(`file://${line.entry}`).href, {
     env: {
       ...process.env,
@@ -45,6 +64,7 @@ function start(line: Start) {
       SIDEDOOR_PLUGIN_ID: plugin,
       SIDEDOOR_DATA_DIR: line.data_dir,
       SIDEDOOR_SETTINGS: JSON.stringify(line.settings ?? {}),
+      ...(snapshot ? { SIDEDOOR_SNAPSHOT: JSON.stringify(snapshot) } : {}),
     },
   } as WorkerOptions);
   // Only the current worker speaks for the plugin; a stopped one is silent.
@@ -67,8 +87,24 @@ function start(line: Start) {
 
 function stop(plugin: string) {
   const worker = workers.get(plugin);
+  if (!worker) return;
+  // From here the worker no longer speaks for the plugin; only its
+  // snapshot reply is heard.
   workers.delete(plugin);
-  worker?.terminate();
+  const kept = new Promise<Kept | null>((resolve) => {
+    const done = (state: unknown) => {
+      clearTimeout(timer);
+      worker.terminate();
+      resolve(state ? { state, at: Date.now() } : null);
+    };
+    const timer = setTimeout(() => done(null), SNAPSHOT_WAIT);
+    worker.addEventListener("message", (event) => {
+      const data = event.data as { type?: string; state?: unknown };
+      if (data.type === "snapshot") done(data.state);
+    });
+    worker.postMessage({ type: "snapshot" });
+  });
+  stopping.set(plugin, kept);
 }
 
 for await (const text of console as unknown as AsyncIterable<string>) {
@@ -79,7 +115,7 @@ for await (const text of console as unknown as AsyncIterable<string>) {
   } catch {
     continue;
   }
-  if (line.type === "start") start(line as Start);
+  if (line.type === "start") await start(line as Start);
   else if (line.type === "stop") stop(line.plugin);
   else {
     const { plugin, ...message } = line;

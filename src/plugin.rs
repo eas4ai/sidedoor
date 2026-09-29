@@ -607,8 +607,9 @@ fn prepare(dir: &Path, sdk: &Path) -> io::Result<()> {
     let scope = dir.join("node_modules").join("@sidedoor");
     let link = scope.join("sdk");
     match fs::symlink_metadata(&link) {
-        // A link from before the app moved, or to another copy of it.
-        Ok(metadata) if metadata.is_symlink() && fs::read_link(&link)? != sdk => {
+        // A link into an app that moved or was deleted. A link to another
+        // working SDK, such as a checkout of this repo, is left alone.
+        Ok(metadata) if metadata.is_symlink() && !link.join("package.json").exists() => {
             fs::remove_file(&link)?;
             std::os::unix::fs::symlink(sdk, &link)?;
         }
@@ -678,7 +679,7 @@ pub fn create(dir: &Path, name: &str) -> io::Result<Manifest> {
     Manifest::read(&folder).ok_or_else(|| io::Error::other("the new plugin can't be read"))
 }
 
-const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useSetting, useState } from "@sidedoor/sdk";
+const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useState } from "@sidedoor/sdk";
 
 // Save this file and the card reloads. The @sidedoor/sdk README lists
 // every element, component and style prop.
@@ -689,12 +690,11 @@ export default definePlugin({
     greeting: { title: "Greeting", type: "text", default: "Hello" },
   },
 
-  card() {
+  card({ settings }) {
     const [count, setCount] = useState(0);
-    const greeting = useSetting<string>("greeting");
     return (
       <Card title={TITLE} accessory={`${count} clicks`}>
-        <Text secondary>{`${greeting}! Edit index.tsx to make this yours.`}</Text>
+        <Text secondary>{`${settings.greeting}! Edit index.tsx to make this yours.`}</Text>
         <div flex gap={8}>
           <Button variant="primary" label="Click me" on_click={() => setCount(count + 1)} />
           <Button label="Reset" on_click={() => setCount(0)} />

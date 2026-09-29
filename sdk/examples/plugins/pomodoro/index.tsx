@@ -13,7 +13,6 @@ import {
   useEffect,
   useInterval,
   useRef,
-  useSetting,
   useStorage,
 } from "@sidedoor/sdk";
 
@@ -86,14 +85,14 @@ export default definePlugin({
     );
   },
 
-  card() {
+  card({ settings }) {
     const [timer] = useStorage("timer", initial);
     now.use();
     const { minutes } = timer;
     const left = secondsLeft(timer);
     const running = timer.endsAt !== null;
     // A new default from Settings › Plugins applies while the timer is idle.
-    const length = Number(useSetting<string>("length") ?? 25);
+    const length = Number(settings.length);
     const lastLength = useRef(length);
     useEffect(() => {
       if (lastLength.current === length) return;

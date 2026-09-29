@@ -21,7 +21,7 @@ a folder in `~/Library/Application Support/Sidedoor/plugins/` with an
 `index.tsx`, and everything about it lives in one `definePlugin` call:
 
 ```tsx
-import { Button, Card, definePlugin, useSetting, useState } from "@sidedoor/sdk";
+import { Button, Card, definePlugin, useState } from "@sidedoor/sdk";
 
 export default definePlugin({
   name: "Counter",
@@ -31,9 +31,9 @@ export default definePlugin({
     step: { title: "Step", type: "number", default: 1 },
   },
 
-  card() {
+  card({ settings }) {
     const [count, setCount] = useState(0);
-    const step = useSetting<number>("step");
+    const step = settings.step; // a number, typed from `settings` above
     return (
       <Card title="Counter" accessory={`${count} clicks`}>
         <div text_size={32} font_weight="semibold">{count}</div>
@@ -56,6 +56,10 @@ There is no JSON to write. The app lists a plugin by reading `name` and
 `icon` from the file as text, without running it, and learns the rest when
 the plugin starts.
 
+Saving keeps what's on screen: `useState`, `useRef` and `createStore`
+values carry over to the reloaded code, as long as they are plain JSON and
+the component's hooks are in the same order.
+
 Add the plugin to the dock under **Settings › Plugins** or **Settings ›
 Items**. The app asks first, because a plugin runs with the same access as
 the app: your files, the network and other programs. Only add plugins from
@@ -63,7 +67,7 @@ people you trust.
 
 The app links `@sidedoor/sdk` into the plugin's `node_modules` and adds a
 `tsconfig.json` if the plugin has none, so the plugin has nothing to install.
-Saving a file in the plugin reloads it. Errors show in its card, and
+Saving a file in the plugin reloads it (see above). Errors show in its card, and
 `console.log` output shows in its log under **Settings › Plugins**.
 
 The app runs all plugins in one Bun process, each in its own Worker thread.
@@ -76,6 +80,10 @@ See [`examples/plugins/pomodoro`](examples/plugins/pomodoro) for a full widget w
 ## Surfaces
 
 `definePlugin({ card, tile?, … })`
+
+Each surface is a function that gets `{ settings }`: every setting's value,
+typed from the `settings` you declared, so `settings.length` in the
+Pomodoro example is `"15" | "25" | "50"` and a typo is a type error.
 
 - `card`: the card that opens when you hover the item.
 - `tile`: the dock slot, about 44 points square. Without it, the dock shows
@@ -183,8 +191,10 @@ them as native rows:
 | `choice` | segmented control, from `options` | string |
 
 Each setting takes `title`, `type`, and optionally `description` and
-`default` (otherwise `""`, `0`, `false` or the first option). Read a setting with `useSetting("key")` during render; the widget
-re-renders when it changes. Outside render, use `sidedoor.settings()`.
+`default` (otherwise `""`, `0`, `false` or the first option). Surfaces,
+`onClick` and actions read them, typed, from their `{ settings }` argument,
+and the widget re-renders when they change. Deeper components can use
+`useSetting("key")`, and code outside render `sidedoor.settings()`.
 
 ## Hooks and state
 
@@ -212,6 +222,39 @@ reordered.
 - `sidedoor.dataDir`: a folder the plugin can keep files in.
 
 Everything else, such as `fetch`, files and timers, is plain Bun.
+
+## Testing
+
+`@sidedoor/sdk/testing` runs a plugin in `bun test` the way the app would:
+
+```tsx
+import { expect, test } from "bun:test";
+import { mount } from "@sidedoor/sdk/testing";
+import pomodoro from "./index";
+
+test("the tile starts the timer", async () => {
+  const plugin = mount(pomodoro, { settings: { length: "15" } });
+  await plugin.click();
+  expect(plugin.find("Pomodoro").props.accessory).toBe("Focusing");
+});
+```
+
+`mount(definition, { settings?, storage? })` returns:
+
+- `card` and `tile`: the rendered trees, and `text(surface?)`: their text.
+- `find(label | match)`: an element by its `label` or `title` prop, else its
+  text. It has `click()`, `change(value)` and `submit(text)`.
+  `findAll(type)` lists every element of a type, e.g. `"Button"`.
+- `press(label)`: clicks the clickable element with that label.
+- `click()`, `action(key)`, `setCardOpen(open)` and `setSettings(values)`:
+  what the dock and Settings would send.
+- `notifications`, `storage` and `sent`: what the plugin asked for. Storage
+  stays in memory.
+- `settle()` waits for re-renders and effects; `unmount()` stops timers.
+
+A plugin that throws fails the test. To typecheck tests, add
+`"types": ["bun"]` to the plugin's `tsconfig.json` and install
+`@types/bun`. See `examples/plugins/pomodoro/index.test.tsx`.
 
 ## Protocol
 

@@ -4,11 +4,14 @@ export type {
   HostMessage,
   Manifest,
   PluginAction,
+  PluginContext,
   PluginDefinition,
   PluginMessage,
   SettingDefinition,
+  SettingValue,
+  SettingValues,
 } from "./host";
-export type { Patch } from "./runtime";
+export type { Patch, Snapshot } from "./runtime";
 export type { Storage } from "./storage";
 export { Fragment } from "./jsx-runtime";
 export {
