@@ -11,7 +11,7 @@ import {
   setInvalidateHandler,
   type Patch,
 } from "./runtime";
-import type { Component, Node } from "./types";
+import type { Component, IconName, Node } from "./types";
 
 /** Messages the app sends a plugin. */
 export type HostMessage =
@@ -23,6 +23,7 @@ export type HostMessage =
 
 /** Messages a plugin sends the app. */
 export type PluginMessage =
+  | ({ type: "manifest" } & Manifest)
   | { type: "render"; surface: string; tree: Node[] }
   | { type: "patch"; surface: string; patches: Patch[] }
   | { type: "open_url"; url: string }
@@ -43,7 +44,9 @@ const env = scope.process?.env ?? {};
 
 const state = {
   cardOpen: false,
-  settings: parseSettings(env.SIDEKICK_SETTINGS),
+  /** What the user saved; defaults fill the gaps. */
+  saved: parseSettings(env.SIDEKICK_SETTINGS),
+  defaults: {} as Record<string, unknown>,
 };
 
 function parseSettings(json: string | undefined): Record<string, unknown> {
@@ -58,7 +61,7 @@ function send(message: PluginMessage) {
   scope.postMessage(message);
 }
 
-function describe(error: unknown) {
+function describeError(error: unknown) {
   return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
@@ -72,7 +75,7 @@ export function useCardOpen(): boolean {
  * in its `package.json` and edited in Settings › Plugins.
  */
 export function useSetting<T = unknown>(key: string): T {
-  return state.settings[key] as T;
+  return (key in state.saved ? state.saved[key] : state.defaults[key]) as T;
 }
 
 /** Things a widget can ask the app to do. */
@@ -83,24 +86,88 @@ export const sidekick = {
   /** A folder the plugin can keep files in. */
   dataDir: env.SIDEKICK_DATA_DIR ?? "",
   /** The plugin's settings right now. */
-  settings: () => ({ ...state.settings }),
+  settings: (): Record<string, unknown> => ({ ...state.defaults, ...state.saved }),
 };
 
-export interface WidgetDefinition {
-  /** Drawn in the dock slot, about 44 points square. Without it the
-   * manifest's icon is shown. */
+/** A setting the user can change in Settings › Plugins. */
+export type SettingDefinition = {
+  title: string;
+  description?: string;
+} & (
+  | { type: "text" | "secret"; default?: string }
+  | { type: "number"; default?: number }
+  | { type: "toggle"; default?: boolean }
+  | { type: "choice"; options: string[]; default?: string }
+);
+
+export interface PluginDefinition {
+  /** Shown in the dock's menus and in Settings. */
+  name: string;
+  /** A Lucide icon name, e.g. `"timer"`; the dock shows it until `tile` draws. */
+  icon?: IconName;
+  /** Card width in points; 280 by default. */
+  width?: number;
+  /** Card height in points. Leave it out and the card fits its content. */
+  height?: number;
+  /** Settings by key, read with `useSetting(key)`. */
+  settings?: Record<string, SettingDefinition>;
+  /** Drawn in the dock slot, about 44 points square. */
   tile?: Component;
   /** Drawn in the card that opens on hover. */
   card: Component;
 }
 
-/** Declares the widget and, inside the app, starts talking to it. */
-export function widget(definition: WidgetDefinition): WidgetDefinition {
+/** What the app learns about a plugin when it starts. */
+export interface Manifest {
+  name: string;
+  icon: string;
+  width: number;
+  height: number | null;
+  settings: Array<{ key: string } & SettingDefinition>;
+}
+
+function defaultOf(setting: SettingDefinition): unknown {
+  if (setting.default !== undefined) return setting.default;
+  switch (setting.type) {
+    case "number":
+      return 0;
+    case "toggle":
+      return false;
+    case "choice":
+      return setting.options[0] ?? null;
+    default:
+      return "";
+  }
+}
+
+/** The manifest and default settings a definition describes. */
+export function describe(definition: PluginDefinition): {
+  manifest: Manifest;
+  defaults: Record<string, unknown>;
+} {
+  const settings = Object.entries(definition.settings ?? {});
+  return {
+    manifest: {
+      name: definition.name,
+      icon: definition.icon ?? "puzzle",
+      width: definition.width ?? 280,
+      height: definition.height ?? null,
+      settings: settings.map(([key, setting]) => ({ key, ...setting })),
+    },
+    defaults: Object.fromEntries(settings.map(([key, setting]) => [key, defaultOf(setting)])),
+  };
+}
+
+/**
+ * Declares the plugin: what it's called, how it looks in the dock and its
+ * settings, all in one place. Inside the app it also starts the plugin.
+ */
+export function definePlugin(definition: PluginDefinition): PluginDefinition {
   if (env.SIDEKICK_PLUGIN === "1") start(definition);
   return definition;
 }
 
-function start(definition: WidgetDefinition) {
+function start(definition: PluginDefinition) {
   // Logs go to the app, which shows them in Settings › Plugins.
   const log = (...args: unknown[]) =>
     send({
@@ -112,6 +179,10 @@ function start(definition: WidgetDefinition) {
   console.debug = log;
   console.warn = log;
   console.error = log;
+
+  const { manifest, defaults } = describe(definition);
+  state.defaults = defaults;
+  send({ type: "manifest", ...manifest });
 
   const surfaces: Record<string, Component> = { card: definition.card };
   if (definition.tile) surfaces.tile = definition.tile;
@@ -132,7 +203,7 @@ function start(definition: WidgetDefinition) {
       }
       runEffects();
     } catch (error) {
-      send({ type: "error", message: describe(error) });
+      send({ type: "error", message: describeError(error) });
     }
   };
   setInvalidateHandler(render);
@@ -144,14 +215,14 @@ function start(definition: WidgetDefinition) {
         try {
           dispatch(message.handler, message.value);
         } catch (error) {
-          send({ type: "error", message: describe(error) });
+          send({ type: "error", message: describeError(error) });
         }
         break;
       case "card":
         state.cardOpen = message.open;
         break;
       case "settings":
-        state.settings = message.values;
+        state.saved = message.values;
         break;
       case "resync":
         sent = new Map();

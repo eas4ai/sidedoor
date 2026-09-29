@@ -83,24 +83,19 @@ impl SettingSpec {
     }
 }
 
-#[derive(Deserialize)]
-struct PackageJson {
-    #[serde(default)]
-    main: Option<String>,
-    sidekick: Option<SidekickSection>,
-}
-
-#[derive(Deserialize)]
-struct SidekickSection {
-    name: String,
+/// What a plugin tells the host about itself when it starts, from its
+/// `definePlugin` call.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Described {
+    pub name: String,
     #[serde(default = "default_icon")]
-    icon: String,
+    pub icon: String,
     #[serde(default = "default_width")]
-    width: f64,
+    pub width: f64,
     #[serde(default)]
-    height: Option<f64>,
+    pub height: Option<f64>,
     #[serde(default)]
-    settings: Vec<SettingSpec>,
+    pub settings: Vec<SettingSpec>,
 }
 
 fn default_icon() -> String {
@@ -110,22 +105,47 @@ fn default_width() -> f64 {
     280.0
 }
 
+/// Files a plugin can start from, in the order they're looked for.
+const ENTRIES: &[&str] = &["index.tsx", "index.ts", "index.jsx", "index.js"];
+
 impl Manifest {
-    /// Reads `dir/package.json`; `None` unless it declares a plugin.
+    /// A plugin folder: one with an `index.tsx` (or `.ts`, `.jsx`, `.js`).
+    ///
+    /// Everything about a plugin lives in its `definePlugin` call, which the
+    /// host only learns once the plugin runs. Until then, which may be never
+    /// if the user doesn't trust it, the name and icon are read from the
+    /// source as text, without running it.
     pub fn read(dir: &Path) -> Option<Self> {
-        let json = fs::read(dir.join("package.json")).ok()?;
-        let package: PackageJson = serde_json::from_slice(&json).ok()?;
-        let section = package.sidekick?;
+        let main = ENTRIES
+            .iter()
+            .map(PathBuf::from)
+            .find(|entry| dir.join(entry).is_file())?;
+        let source = fs::read_to_string(dir.join(&main)).ok()?;
+        if !source.contains("definePlugin") {
+            return None;
+        }
+        let id = dir.file_name()?.to_string_lossy().into_owned();
         Some(Self {
-            id: dir.file_name()?.to_string_lossy().into_owned(),
-            name: section.name,
-            icon: section.icon,
-            width: section.width.clamp(120.0, 480.0),
-            height: section.height.map(|height| height.clamp(40.0, MAX_HEIGHT)),
-            settings: section.settings,
+            name: peek(&source, "name").unwrap_or_else(|| id.clone()),
+            icon: peek(&source, "icon").unwrap_or_else(default_icon),
+            id,
+            width: default_width(),
+            height: None,
+            settings: Vec::new(),
             dir: dir.to_path_buf(),
-            main: PathBuf::from(package.main.unwrap_or_else(|| "index.tsx".into())),
+            main,
         })
+    }
+
+    /// Takes on what the running plugin says about itself.
+    pub fn update(&mut self, described: Described) {
+        self.name = described.name;
+        self.icon = described.icon;
+        self.width = described.width.clamp(120.0, 480.0);
+        self.height = described
+            .height
+            .map(|height| height.clamp(40.0, MAX_HEIGHT));
+        self.settings = described.settings;
     }
 
     /// The asset path of the plugin's icon.
@@ -135,21 +155,49 @@ impl Manifest {
 
     /// Every setting's value: what the user saved, else the default.
     pub fn settings_with(&self, saved: Option<&Map<String, Value>>) -> Map<String, Value> {
-        self.settings
+        let mut values: Map<String, Value> = self
+            .settings
             .iter()
-            .map(|spec| {
-                let value = saved
-                    .and_then(|saved| saved.get(&spec.key))
-                    .cloned()
-                    .unwrap_or_else(|| spec.default_value());
-                (spec.key.clone(), value)
-            })
-            .collect()
+            .map(|spec| (spec.key.clone(), spec.default_value()))
+            .collect();
+        if let Some(saved) = saved {
+            values.extend(saved.clone());
+        }
+        values
     }
 }
 
 /// The tallest card a plugin gets, fitted or fixed.
 pub const MAX_HEIGHT: f64 = 600.0;
+
+/// The first string given for `key` inside `definePlugin(…)`, as in
+/// `name: "Pomodoro"`. Only for listing a plugin that hasn't run yet.
+fn peek(source: &str, key: &str) -> Option<String> {
+    let body = &source[source.find("definePlugin(")?..];
+    let mut searched = 0;
+    while let Some(found) = body[searched..].find(key) {
+        let at = searched + found;
+        searched = at + key.len();
+        let whole_word = !body[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+        let Some(value) = body[searched..].trim_start().strip_prefix(':') else {
+            continue;
+        };
+        if !whole_word {
+            continue;
+        }
+        let value = value.trim_start();
+        let quote = value
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\'' | '`'))?;
+        let inner = &value[1..];
+        return Some(inner[..inner.find(quote)?].to_string());
+    }
+    None
+}
 
 /// Where Lucide icons live in the app's assets.
 pub fn icon_path(name: &str) -> String {
@@ -243,6 +291,8 @@ pub fn apply_patches(tree: &mut [Node], patches: Vec<Patch>) -> bool {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginMessage {
+    /// Sent first: what `definePlugin` declares.
+    Manifest(Described),
     Render {
         surface: String,
         tree: Vec<Node>,
@@ -584,32 +634,23 @@ pub fn create(dir: &Path, name: &str) -> io::Result<Manifest> {
         n += 1;
     }
     fs::create_dir_all(&folder)?;
-    let package = serde_json::json!({
-        "name": folder.file_name().map(|name| name.to_string_lossy().into_owned()),
-        "private": true,
-        "main": "index.tsx",
-        "sidekick": {
-            "name": name,
-            "icon": "sparkles",
-            "width": 280,
-            "settings": [
-                { "key": "greeting", "title": "Greeting", "type": "text", "default": "Hello" }
-            ]
-        }
-    });
-    let package = serde_json::to_string_pretty(&package).map_err(io::Error::other)?;
-    fs::write(folder.join("package.json"), package + "\n")?;
     fs::write(folder.join("tsconfig.json"), TSCONFIG)?;
     let title = serde_json::to_string(name).map_err(io::Error::other)?;
     fs::write(folder.join("index.tsx"), TEMPLATE.replace("TITLE", &title))?;
     Manifest::read(&folder).ok_or_else(|| io::Error::other("the new plugin can't be read"))
 }
 
-const TEMPLATE: &str = r#"import { Button, Card, Text, useSetting, useState, widget } from "@sidekick/sdk";
+const TEMPLATE: &str = r#"import { Button, Card, Text, definePlugin, useSetting, useState } from "@sidekick/sdk";
 
 // Save this file and the card reloads. The @sidekick/sdk README lists
 // every element, component and style prop.
-export default widget({
+export default definePlugin({
+  name: TITLE,
+  icon: "sparkles",
+  settings: {
+    greeting: { title: "Greeting", type: "text", default: "Hello" },
+  },
+
   card() {
     const [count, setCount] = useState(0);
     const greeting = useSetting<string>("greeting");
@@ -754,29 +795,67 @@ mod tests {
     }
 
     #[test]
-    fn manifests_come_from_package_json() {
+    fn plugins_are_found_by_their_definition_without_running_them() {
         let dir = std::env::temp_dir().join(format!("sidekick-plugin-{}", std::process::id()));
         let plugin = dir.join("pomodoro");
         fs::create_dir_all(&plugin).unwrap();
         fs::write(
-            plugin.join("package.json"),
-            r#"{"name":"pomodoro","main":"widget.tsx","sidekick":{"name":"Pomodoro","icon":"timer","height":9000,
-               "settings":[{"key":"sound","title":"Sound","type":"toggle"},
-                           {"key":"mode","title":"Mode","type":"choice","options":["focus","break"]}]}}"#,
+            plugin.join("index.tsx"),
+            r#"import { definePlugin } from "@sidekick/sdk";
+               const label = { name: "not this one" };
+               export default definePlugin({
+                 icon: 'timer',
+                 name: "Pomodoro",
+                 card: () => <div>{label.name}</div>,
+               });"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("unnamed")).unwrap();
+        fs::write(
+            dir.join("unnamed/index.ts"),
+            "export default definePlugin({ card })",
         )
         .unwrap();
         fs::create_dir_all(dir.join("not-a-plugin")).unwrap();
-        fs::write(dir.join("not-a-plugin/package.json"), r#"{"name":"x"}"#).unwrap();
+        fs::write(dir.join("not-a-plugin/index.ts"), "console.log(1)").unwrap();
 
         let found = discover(&dir);
         fs::remove_dir_all(&dir).ok();
-        assert_eq!(found.len(), 1);
-        let manifest = &found[0];
-        assert_eq!(manifest.id, "pomodoro");
-        assert_eq!(manifest.main, PathBuf::from("widget.tsx"));
-        assert_eq!(manifest.width, 280.0);
-        assert_eq!(manifest.height, Some(MAX_HEIGHT));
-        assert_eq!(manifest.icon_path(), "icons/timer.svg");
+        assert_eq!(found.len(), 2);
+        let pomodoro = found.iter().find(|m| m.id == "pomodoro").unwrap();
+        assert_eq!(pomodoro.name, "Pomodoro");
+        assert_eq!(pomodoro.icon_path(), "icons/timer.svg");
+        assert_eq!(pomodoro.main, PathBuf::from("index.tsx"));
+        let unnamed = found.iter().find(|m| m.id == "unnamed").unwrap();
+        assert_eq!(
+            (unnamed.name.as_str(), unnamed.icon.as_str()),
+            ("unnamed", "puzzle")
+        );
+    }
+
+    #[test]
+    fn the_running_plugin_describes_itself() {
+        let json = r#"{"type":"manifest","plugin":"pomodoro","name":"Pomodoro","icon":"timer",
+            "width":9000,"height":null,
+            "settings":[{"key":"sound","title":"Sound","type":"toggle"},
+                        {"key":"mode","title":"Mode","type":"choice","options":["focus","break"]}]}"#;
+        let PluginMessage::Manifest(described) = serde_json::from_str(json).unwrap() else {
+            panic!("expected a manifest");
+        };
+        let mut manifest = Manifest {
+            id: "pomodoro".into(),
+            name: "pomodoro".into(),
+            icon: "puzzle".into(),
+            width: 280.0,
+            height: None,
+            settings: Vec::new(),
+            dir: PathBuf::from("/plugins/pomodoro"),
+            main: PathBuf::from("index.tsx"),
+        };
+        manifest.update(described);
+        assert_eq!(manifest.name, "Pomodoro");
+        assert_eq!(manifest.width, 480.0);
+        assert_eq!(manifest.height, None);
 
         let saved = Map::from_iter([("mode".to_string(), Value::from("break"))]);
         let values = manifest.settings_with(Some(&saved));
@@ -792,12 +871,15 @@ mod tests {
         let first = create(&dir, "My Widget!").unwrap();
         let second = create(&dir, "My Widget!").unwrap();
         let source = fs::read_to_string(first.dir.join("index.tsx")).unwrap();
+        let has_package = first.dir.join("package.json").exists();
         fs::remove_dir_all(&dir).ok();
         assert_eq!(first.id, "my-widget");
         assert_eq!(second.id, "my-widget-2");
         assert_eq!(first.name, "My Widget!");
-        assert_eq!(first.height, None);
+        assert_eq!(first.icon, "sparkles");
+        assert!(source.contains(r#"name: "My Widget!","#));
         assert!(source.contains(r#"<Card title={"My Widget!"}"#));
+        assert!(!has_package, "everything lives in definePlugin");
         assert_eq!(slug("  ..  "), "widget");
     }
 }

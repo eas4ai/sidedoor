@@ -1,6 +1,12 @@
 export * from "./components";
-export { sidekick, useCardOpen, useSetting, widget } from "./host";
-export type { HostMessage, PluginMessage, WidgetDefinition } from "./host";
+export { definePlugin, describe, sidekick, useCardOpen, useSetting } from "./host";
+export type {
+  HostMessage,
+  Manifest,
+  PluginDefinition,
+  PluginMessage,
+  SettingDefinition,
+} from "./host";
 export type { Patch } from "./runtime";
 export { Fragment } from "./jsx-runtime";
 export {

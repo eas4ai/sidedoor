@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { Button, Card, Meter, useEffect, useState } from "@sidekick/sdk";
+import { Button, Card, Meter, describe, useEffect, useState } from "@sidekick/sdk";
 import { diff, dispatch, renderSurfaces, reset, runEffects, setInvalidateHandler } from "../src/runtime";
 
 afterEach(() => {
@@ -114,4 +114,29 @@ test("re-renders become small patches", () => {
   const grown = [{ t: "div", p: { gap: 4 }, c: ["a"] }];
   expect(diff(before, grown)).toEqual([{ op: "replace", path: [0], node: grown[0] }]);
   expect(diff(before, [...before, ...before])).toBeNull();
+});
+
+test("definePlugin carries the whole manifest and its defaults", () => {
+  const { manifest, defaults } = describe({
+    name: "Pomodoro",
+    icon: "timer",
+    settings: {
+      length: { title: "Length", type: "choice", options: ["15", "25"] },
+      sound: { title: "Sound", type: "toggle", default: true },
+      note: { title: "Note", type: "text" },
+    },
+    card: () => null,
+  });
+  expect(manifest).toEqual({
+    name: "Pomodoro",
+    icon: "timer",
+    width: 280,
+    height: null,
+    settings: [
+      { key: "length", title: "Length", type: "choice", options: ["15", "25"] },
+      { key: "sound", title: "Sound", type: "toggle", default: true },
+      { key: "note", title: "Note", type: "text" },
+    ],
+  });
+  expect(defaults).toEqual({ length: "15", sound: true, note: "" });
 });

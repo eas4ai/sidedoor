@@ -17,54 +17,48 @@ div().flex().flex_col().gap(px(8.0)).px(px(12.0)).text_color(palette.secondary)
 
 The quickest start is **Settings › Plugins › New Plugin**. It creates a
 working widget, adds it to the dock and opens its code. By hand, a plugin is
-a folder in `~/Library/Application Support/SidekickClone/plugins/`:
-
-```
-plugins/pomodoro/
-  package.json
-  index.tsx
-```
-
-```json
-{
-  "name": "pomodoro",
-  "main": "index.tsx",
-  "sidekick": {
-    "name": "Pomodoro",
-    "icon": "timer",
-    "width": 290,
-    "settings": [
-      { "key": "length", "title": "Default length", "type": "choice", "options": ["15", "25", "50"] }
-    ]
-  }
-}
-```
-
-- `icon`: a [Lucide](https://lucide.dev/icons) icon name.
-- `width`: the card width in points.
-- `height`: optional. Leave it out and the card fits its content, up to 600 points.
-- `settings`: optional. See [Settings](#settings).
-
-Add the plugin to the dock under **Settings › Plugins** or **Settings ›
-Items**. The app asks first, because a plugin runs with the same access as
-the app: your files, the network and other programs. Only add plugins from
-people you trust.
+a folder in `~/Library/Application Support/SidekickClone/plugins/` with an
+`index.tsx`, and everything about it lives in one `definePlugin` call:
 
 ```tsx
-import { Button, Card, useState, widget } from "@sidekick/sdk";
+import { Button, Card, definePlugin, useSetting, useState } from "@sidekick/sdk";
 
-export default widget({
+export default definePlugin({
+  name: "Counter",
+  icon: "hash",
+  width: 260,
+  settings: {
+    step: { title: "Step", type: "number", default: 1 },
+  },
+
   card() {
     const [count, setCount] = useState(0);
+    const step = useSetting<number>("step");
     return (
       <Card title="Counter" accessory={`${count} clicks`}>
         <div text_size={32} font_weight="semibold">{count}</div>
-        <Button variant="primary" label="Add" on_click={() => setCount(count + 1)} />
+        <Button variant="primary" label="Add" on_click={() => setCount(count + step)} />
       </Card>
     );
   },
 });
 ```
+
+- `name`: shown in the dock's menus and in Settings.
+- `icon`: a [Lucide](https://lucide.dev/icons) icon name.
+- `width`: the card width in points, 280 by default.
+- `height`: optional. Leave it out and the card fits its content, up to 600 points.
+- `settings`: optional. See [Settings](#settings).
+- `card` and `tile`: see [Surfaces](#surfaces).
+
+There is no JSON to write. The app lists a plugin by reading `name` and
+`icon` from the file as text, without running it, and learns the rest when
+the plugin starts.
+
+Add the plugin to the dock under **Settings › Plugins** or **Settings ›
+Items**. The app asks first, because a plugin runs with the same access as
+the app: your files, the network and other programs. Only add plugins from
+people you trust.
 
 The app links `@sidekick/sdk` into the plugin's `node_modules` and adds a
 `tsconfig.json` if the plugin has none, so the plugin has nothing to install.
@@ -80,11 +74,11 @@ See [`examples/plugins/pomodoro`](examples/plugins/pomodoro) for a full widget w
 
 ## Surfaces
 
-`widget({ card, tile? })`
+`definePlugin({ card, tile?, … })`
 
 - `card`: the card that opens when you hover the item.
 - `tile`: the dock slot, about 44 points square. Without it, the dock shows
-  the manifest's icon.
+  the plugin's `icon`.
 
 Both are rendered all the time, not only while visible. Put timers in one
 of them only. `useCardOpen()` tells you whether the card is showing, which
@@ -159,8 +153,8 @@ animation, and Reduce Motion turns it off.
 
 ## Settings
 
-Declare settings in `package.json`, and **Settings › Plugins** shows them as
-native rows:
+Declare settings in `definePlugin`, by key, and **Settings › Plugins** shows
+them as native rows:
 
 | `type` | Row | Value |
 | --- | --- | --- |
@@ -170,8 +164,8 @@ native rows:
 | `toggle` | switch | boolean |
 | `choice` | segmented control, from `options` | string |
 
-Each setting takes `key`, `title`, and optionally `description` and
-`default`. Read a setting with `useSetting("key")` during render; the widget
+Each setting takes `title`, `type`, and optionally `description` and
+`default` (otherwise `""`, `0`, `false` or the first option). Read a setting with `useSetting("key")` during render; the widget
 re-renders when it changes. Outside render, use `sidekick.settings()`.
 
 ## Hooks and state
@@ -199,7 +193,8 @@ The app talks to the supervisor (`src/supervisor.ts`) in JSON lines tagged
 with a plugin id, and the supervisor passes messages to and from each
 plugin's worker.
 
-The plugin sends each surface whole once:
+The plugin first sends `{"type":"manifest", …}`, with what `definePlugin`
+declares. Then it sends each surface whole once:
 `{"type":"render","surface":"card","tree":[…]}`, where a node is either a
 string or `{"t": tag, "p": props, "c": children}`. After that it sends only
 what changed: `{"type":"patch","surface":"card","patches":[{"op":"props","path":[0,2],"props":{…}}]}`,

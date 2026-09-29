@@ -1362,3 +1362,35 @@ fn plugin_transitions_ease_and_scroll_areas_clip(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn a_starting_plugin_describes_itself_to_the_dock(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        serde_json::from_value(serde_json::json!({
+            "type": "manifest", "name": "Tally", "icon": "hash", "width": 320, "height": 150,
+            "settings": [{ "key": "step", "title": "Step", "type": "number", "default": 2 }]
+        }))
+        .unwrap(),
+    );
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        assert_eq!(dock.item_name("plugin:counter"), "Tally");
+        let crate::dock::ItemKind::Plugin(manifest) = &dock.items[0].kind else {
+            panic!("expected the plugin");
+        };
+        assert_eq!((manifest.width, manifest.height), (320.0, Some(150.0)));
+        assert_eq!(
+            dock.plugin_values(manifest)["step"],
+            serde_json::Value::from(2)
+        );
+    });
+}

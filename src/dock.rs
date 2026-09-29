@@ -535,6 +535,16 @@ impl Dock {
             return;
         };
         match message {
+            PluginMessage::Manifest(described) => {
+                // The running plugin's own word on its name, look and settings.
+                for item in &mut self.items {
+                    if let ItemKind::Plugin(manifest) = &mut item.kind
+                        && manifest.id == id
+                    {
+                        manifest.update(described.clone());
+                    }
+                }
+            }
             PluginMessage::Render { surface, tree } => {
                 match surface.as_str() {
                     "tile" => state.tile = Some(tree),

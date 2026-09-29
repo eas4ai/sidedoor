@@ -7,11 +7,11 @@ import {
   Icon,
   Segmented,
   createStore,
+  definePlugin,
   sidekick,
   useEffect,
   useInterval,
   useSetting,
-  widget,
 } from "@sidekick/sdk";
 
 const LENGTHS = [15, 25, 50];
@@ -26,7 +26,20 @@ function restart(minutes: number) {
   timer.set({ minutes, left: minutes * 60, running: false });
 }
 
-export default widget({
+export default definePlugin({
+  name: "Pomodoro",
+  icon: "timer",
+  width: 290,
+  settings: {
+    length: {
+      title: "Default length",
+      description: "Minutes a new session starts with.",
+      type: "choice",
+      options: ["15", "25", "50"],
+      default: "25",
+    },
+  },
+
   tile() {
     const { left, running } = timer.use();
     return (
