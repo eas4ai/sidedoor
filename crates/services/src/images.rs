@@ -32,12 +32,13 @@ pub fn fresh(path: &PathBuf) -> bool {
 }
 
 pub fn download(url: &str, to: &PathBuf) -> Result<(), String> {
-    let response = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .get(url)
-        .call()
-        .map_err(|err| err.to_string())?;
+    let response = crate::http::agent(
+        url,
+        ureq::AgentBuilder::new().timeout(Duration::from_secs(20)),
+    )
+    .get(url)
+    .call()
+    .map_err(|err| err.to_string())?;
     let mut bytes = Vec::new();
     response
         .into_reader()

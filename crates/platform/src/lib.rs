@@ -19,6 +19,7 @@ pub mod native;
 #[cfg(target_os = "macos")]
 #[path = "macos/notifications.rs"]
 mod notifications;
+pub mod proxy;
 #[cfg_attr(target_os = "windows", path = "windows/status_menu.rs")]
 #[cfg_attr(target_os = "macos", path = "macos/status_menu.rs")]
 #[cfg_attr(target_os = "linux", path = "linux/status_menu.rs")]

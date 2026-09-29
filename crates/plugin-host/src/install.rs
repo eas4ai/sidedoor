@@ -92,7 +92,7 @@ impl Installer for Downloader {
             Origin::GitHub { owner, repo } => {
                 let commit = self.latest_commit(link)?;
                 let url = format!("{API}/repos/{owner}/{repo}/tarball/{commit}");
-                let response = agent()
+                let response = agent(&url)
                     .get(&url)
                     .call()
                     .map_err(|err| describe(err, link))?;
@@ -142,7 +142,7 @@ impl Installer for Downloader {
             Origin::GitHub { owner, repo } => {
                 let reference = link.reference.as_deref().unwrap_or("HEAD");
                 let url = format!("{API}/repos/{owner}/{repo}/commits/{reference}");
-                let sha = agent()
+                let sha = agent(&url)
                     .get(&url)
                     .set("Accept", "application/vnd.github.sha")
                     .call()
@@ -174,12 +174,18 @@ fn is_commit(text: &str) -> bool {
     text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
+/// An agent for requests to `url`, through the environment's proxy unless
+/// `NO_PROXY` or a loopback address says to connect directly.
+fn agent(url: &str) -> ureq::Agent {
+    let builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
-        .user_agent("Sidedoor")
-        .build()
+        .user_agent("Sidedoor");
+    match platform::proxy::for_url(url).and_then(|proxy| ureq::Proxy::new(proxy).ok()) {
+        Some(proxy) => builder.proxy(proxy),
+        None => builder,
+    }
+    .build()
 }
 
 fn describe(err: ureq::Error, link: &Link) -> String {
@@ -203,7 +209,10 @@ fn describe(err: ureq::Error, link: &Link) -> String {
 
 /// Reads a whole download into memory, up to the size limit.
 fn download(url: &str, link: &Link) -> Result<Vec<u8>, String> {
-    let response = agent().get(url).call().map_err(|err| describe(err, link))?;
+    let response = agent(url)
+        .get(url)
+        .call()
+        .map_err(|err| describe(err, link))?;
     let mut bytes = Vec::new();
     response
         .into_reader()
