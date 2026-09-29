@@ -14,13 +14,11 @@ pub(super) fn general_page(
         LoginItem::On | LoginItem::Off => None,
     };
     let handler = dock_entity.clone();
-    let launch = Switch::new("launch-at-login")
-        .small()
-        .color(palette.blue)
+    let launch = crate::ui::switch::mac_switch("launch-at-login", palette)
         .checked(matches!(login, LoginItem::On | LoginItem::NeedsApproval))
         .disabled(login == LoginItem::Unavailable)
-        .on_click(move |checked, _, cx| {
-            handler.update(cx, |dock, cx| dock.set_launch_at_login(*checked, cx));
+        .on_change(move |checked, _, cx| {
+            handler.update(cx, |dock, cx| dock.set_launch_at_login(checked, cx));
         });
 
     let count = dock.history.len();

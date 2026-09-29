@@ -5,6 +5,7 @@
 use crate::app::dock::{Dock, InstallState, UpdateState};
 use crate::app::host::REVEAL_LABEL;
 use crate::ui::settings::{push_button, row, section};
+use crate::ui::switch::mac_switch;
 use crate::ui::theme::{Palette, text};
 use domain::config::MAX_ITEMS;
 use gpui_kit::{
@@ -14,9 +15,8 @@ use gpui_kit::{
     Window,
     assets::IconName,
     component::{
-        Disableable as _, Sizable as _,
+        Sizable as _,
         input::{Input, InputEvent, InputState},
-        switch::Switch,
     },
     div,
     prelude::FluentBuilder as _,
@@ -205,13 +205,11 @@ fn setting_row(
     let control = match spec.kind {
         SettingKind::Toggle => {
             let (dock, manifest, key) = (dock.clone(), manifest.clone(), spec.key.clone());
-            Switch::new(SharedString::from(format!("plugin-toggle:{id}")))
-                .small()
-                .color(palette.blue)
+            mac_switch(SharedString::from(format!("plugin-toggle:{id}")), palette)
                 .checked(current.as_bool().unwrap_or(false))
-                .on_click(move |checked, _, cx| {
+                .on_change(move |checked, _, cx| {
                     dock.update(cx, |dock, cx| {
-                        dock.set_plugin_setting(&manifest, &key, Value::from(*checked), cx)
+                        dock.set_plugin_setting(&manifest, &key, Value::from(checked), cx)
                     });
                 })
                 .into_any_element()
@@ -822,19 +820,20 @@ fn plugin_row(
                 ),
         );
     let (dock, manifest_for_switch) = (page.dock.clone(), manifest.clone());
-    let switch = Switch::new(SharedString::from(format!("plugin-dock:{}", manifest.id)))
-        .small()
-        .color(palette.blue)
-        .checked(in_dock)
-        .disabled(!in_dock && !room)
-        .on_click(move |checked, window, cx| {
-            if *checked {
-                confirm_add(dock.clone(), manifest_for_switch.clone(), window, cx);
-            } else {
-                let id = format!("plugin:{}", manifest_for_switch.id);
-                dock.update(cx, |dock, cx| dock.remove(&id, cx));
-            }
-        });
+    let switch = mac_switch(
+        SharedString::from(format!("plugin-dock:{}", manifest.id)),
+        palette,
+    )
+    .checked(in_dock)
+    .disabled(!in_dock && !room)
+    .on_change(move |checked, window, cx| {
+        if checked {
+            confirm_add(dock.clone(), manifest_for_switch.clone(), window, cx);
+        } else {
+            let id = format!("plugin:{}", manifest_for_switch.id);
+            dock.update(cx, |dock, cx| dock.remove(&id, cx));
+        }
+    });
     div()
         .min_h(px(44.0))
         .px(px(12.0))

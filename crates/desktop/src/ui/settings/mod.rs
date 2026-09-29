@@ -14,11 +14,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription, Task,
     TestSupportExt as _, Window, WindowControlArea,
     assets::IconName,
-    component::{
-        Disableable as _, Sizable as _,
-        input::{Input, InputEvent, InputState},
-        switch::Switch,
-    },
+    component::input::{Input, InputEvent, InputState},
     div, img, linear_color_stop, linear_gradient,
     prelude::FluentBuilder as _,
     px, rgba, svg, transparent_black,

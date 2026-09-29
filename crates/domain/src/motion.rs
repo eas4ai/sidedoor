@@ -57,6 +57,8 @@ pub const ICON_IN: Motion = motion(460, 0.2, 1.3, 0.3, 1.0);
 pub const MAGNIFY: f32 = 0.14;
 /// How far magnification reaches, in slots.
 const MAGNIFY_REACH: f32 = 1.1;
+/// A switch's thumb sliding across, settling with a hint of spring.
+pub const SWITCH: Motion = motion(260, 0.3, 1.12, 0.4, 1.0);
 /// Scale of an item while it is pressed.
 pub const PRESSED: f32 = 0.86;
 
@@ -114,7 +116,9 @@ mod tests {
 
     #[test]
     fn curves_start_and_end_on_their_endpoints() {
-        for motion in [DOCK_IN, DOCK_OUT, CARD_IN, CARD_MOVE, CARD_OUT, ICON_IN] {
+        for motion in [
+            DOCK_IN, DOCK_OUT, CARD_IN, CARD_MOVE, CARD_OUT, ICON_IN, SWITCH,
+        ] {
             assert!(sample(motion.curve, 0.0).abs() < 1e-4);
             assert!((sample(motion.curve, 1.0) - 1.0).abs() < 1e-4);
         }

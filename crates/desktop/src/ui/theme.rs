@@ -79,6 +79,10 @@ pub struct Palette {
     pub red: Hsla,
     pub purple: Hsla,
     pub purple_deep: Hsla,
+    /// A switch's track when off, as `NSSwitch` draws it; on is `blue`.
+    pub switch_off: Hsla,
+    /// Whether controls should skip their animations.
+    pub reduce_motion: bool,
 }
 
 fn color(value: u32) -> Hsla {
@@ -89,6 +93,7 @@ impl Palette {
     pub fn new(window: &Window, accessibility: Accessibility) -> Self {
         let dark = is_dark(window);
         let mut palette = if dark { Self::dark() } else { Self::light() };
+        palette.reduce_motion = accessibility.reduce_motion;
         if accessibility.increase_contrast {
             palette.secondary = palette.label.opacity(0.8);
             palette.tertiary = palette.label.opacity(0.6);
@@ -128,6 +133,8 @@ impl Palette {
             red: color(0xff3b30ff),
             purple: color(0x8e7cffff),
             purple_deep: color(0x5a44e6ff),
+            switch_off: color(0x00000019),
+            reduce_motion: false,
         }
     }
 
@@ -152,6 +159,8 @@ impl Palette {
             red: color(0xff453aff),
             purple: color(0x8e7cffff),
             purple_deep: color(0x5a44e6ff),
+            switch_off: color(0xffffff19),
+            reduce_motion: false,
         }
     }
 }

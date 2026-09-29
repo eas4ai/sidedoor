@@ -15,10 +15,8 @@ use gpui_kit::{
     Subscription, TestSupportExt as _, Window, auto,
     base::{Easing, Spring, Transition, spring, transition},
     component::{
-        Disableable as _, Sizable as _,
         chart::{AreaChart, BarChart, LineChart},
         input::{Input, InputEvent, InputState},
-        switch::Switch,
     },
     div, img,
     prelude::FluentBuilder as _,
@@ -241,14 +239,12 @@ impl Surface {
             "Switch" => {
                 let (dock, plugin) = (self.dock.clone(), self.plugin.clone());
                 let handler = handler(props, "on_change");
-                let switch = Switch::new(self.id(props, path))
-                    .small()
-                    .color(palette.blue)
+                let switch = crate::ui::switch::mac_switch(self.id(props, path), palette)
                     .checked(flag(props, "checked"))
                     .disabled(flag(props, "disabled"))
-                    .on_click(move |checked, _, cx| {
+                    .on_change(move |checked, _, cx| {
                         if let Some(handler) = &handler {
-                            send(&dock, &plugin, handler, Value::Bool(*checked), cx);
+                            send(&dock, &plugin, handler, Value::Bool(checked), cx);
                         }
                     });
                 style(div().flex_shrink_0().child(switch), props, palette).into_any_element()
