@@ -94,6 +94,7 @@ pub fn card_size(item: &DockItem, dock: &Dock, text_width: impl Fn(&str) -> f64)
                 TOOLTIP_HEIGHT,
             )
         }
+        ItemKind::Plugin(manifest) => (manifest.width, manifest.height),
         ItemKind::Weather => (CARD_WIDTH, WEATHER_HEIGHT),
         ItemKind::Stats => (CARD_WIDTH, STATS_HEIGHT),
         ItemKind::Clipboard => {
@@ -124,7 +125,7 @@ fn condition_icon(condition: Condition, is_day: bool) -> SharedString {
     name.path()
 }
 
-fn icon(path: SharedString, size: f32, color: Hsla) -> impl IntoElement {
+pub(crate) fn icon(path: SharedString, size: f32, color: Hsla) -> impl IntoElement {
     svg()
         .path(path)
         .size(px(size))
@@ -313,6 +314,9 @@ impl Render for DockView {
                     ItemKind::Stats => stats_tile(cpu, ram, motion.scale, palette),
                     ItemKind::Clipboard => {
                         clipboard_tile(dock.history.len(), motion.scale, palette)
+                    }
+                    ItemKind::Plugin(manifest) => {
+                        plugin_tile(&self.dock, dock, manifest, motion.scale, palette)
                     }
                 };
                 let shortcut = dock.shortcut_for(&item.id).map(ToString::to_string);
@@ -519,7 +523,74 @@ pub fn widget_glyph(kind: &ItemKind) -> SharedString {
         ItemKind::Stats => IconName::Cpu.path(),
         ItemKind::Clipboard => IconName::Clipboard.path(),
         ItemKind::App(_) => IconName::AppWindow.path(),
+        ItemKind::Plugin(manifest) => manifest.icon_path().into(),
     }
+}
+
+/// A plugin's own tile, or its icon until it draws one.
+fn plugin_tile(
+    dock_entity: &Entity<Dock>,
+    dock: &Dock,
+    manifest: &crate::plugin::Manifest,
+    scale: f32,
+    palette: Palette,
+) -> AnyElement {
+    let surface = crate::plugin_ui::Surface {
+        dock: dock_entity.clone(),
+        plugin: manifest.id.clone().into(),
+        palette,
+    };
+    match dock
+        .plugin(&manifest.id)
+        .and_then(|state| state.tile.as_ref())
+    {
+        Some(tile) => div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .children(surface.render(tile, "tile"))
+            .into_any_element(),
+        None => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon(
+                manifest.icon_path().into(),
+                20.0 * scale,
+                palette.label,
+            ))
+            .into_any_element(),
+    }
+}
+
+/// A plugin's card: what it drew, or why it can't draw yet.
+fn plugin_card(
+    dock_entity: &Entity<Dock>,
+    dock: &Dock,
+    manifest: &crate::plugin::Manifest,
+    palette: Palette,
+) -> AnyElement {
+    let state = dock.plugin(&manifest.id);
+    if let Some(problem) = state.and_then(|state| state.problem.as_ref()) {
+        return message_card(&manifest.name, problem, palette);
+    }
+    let Some(card) = state.and_then(|state| state.card.as_ref()) else {
+        return message_card(&manifest.name, "Starting…", palette);
+    };
+    let surface = crate::plugin_ui::Surface {
+        dock: dock_entity.clone(),
+        plugin: manifest.id.clone().into(),
+        palette,
+    };
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .children(surface.render(card, "card"))
+        .into_any_element()
 }
 
 fn app_tile(app: &AppInfo, motion: SlotMotion, palette: Palette, vertical: bool) -> AnyElement {
@@ -754,6 +825,7 @@ impl Render for CardView {
                 ItemKind::Weather => weather_card(dock, palette),
                 ItemKind::Stats => stats_card(dock, readings.as_ref(), palette),
                 ItemKind::Clipboard => clipboard_card(&self.dock, dock, animate, palette),
+                ItemKind::Plugin(manifest) => plugin_card(&self.dock, dock, manifest, palette),
             };
             let content = div().relative().size_full().child(content);
             if !animate {
@@ -868,7 +940,7 @@ fn tooltip(name: &str, shortcut: Option<String>, palette: Palette) -> AnyElement
         .into_any_element()
 }
 
-fn card_body() -> Div {
+pub(crate) fn card_body() -> Div {
     div()
         .size_full()
         .flex()
@@ -877,7 +949,7 @@ fn card_body() -> Div {
         .py(px(12.0))
 }
 
-fn title(label: impl Into<SharedString>) -> Div {
+pub(crate) fn title(label: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(text::TITLE3))
         .font_weight(FontWeight::SEMIBOLD)
@@ -1013,7 +1085,7 @@ fn weather_card(dock: &Dock, palette: Palette) -> AnyElement {
         .into_any_element()
 }
 
-fn gauge(fraction: f32, color: Hsla, palette: Palette) -> impl IntoElement {
+pub(crate) fn gauge(fraction: f32, color: Hsla, palette: Palette) -> impl IntoElement {
     div()
         .h(px(6.0))
         .w_full()
@@ -1028,9 +1100,9 @@ fn gauge(fraction: f32, color: Hsla, palette: Palette) -> impl IntoElement {
         )
 }
 
-fn meter(
-    glyph: IconName,
-    label: &'static str,
+pub(crate) fn meter(
+    glyph: Option<SharedString>,
+    label: impl Into<SharedString>,
     value: String,
     fraction: f32,
     color: Hsla,
@@ -1045,12 +1117,12 @@ fn meter(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(glyph.path(), 13.0, palette.secondary))
+                .children(glyph.map(|glyph| icon(glyph, 13.0, palette.secondary)))
                 .child(
                     div()
                         .text_size(px(text::CALLOUT))
                         .font_weight(FontWeight::MEDIUM)
-                        .child(label),
+                        .child(label.into()),
                 )
                 .child(
                     div()
@@ -1092,7 +1164,7 @@ fn stats_card(dock: &Dock, readings: Option<&Readings>, palette: Palette) -> Any
                 .child(sparkline),
         )
         .child(meter(
-            IconName::Cpu,
+            Some(IconName::Cpu.path()),
             "CPU",
             percent(readings.cpu),
             readings.cpu_fraction,
@@ -1100,7 +1172,7 @@ fn stats_card(dock: &Dock, readings: Option<&Readings>, palette: Palette) -> Any
             palette,
         ))
         .child(meter(
-            IconName::MemoryStick,
+            Some(IconName::MemoryStick.path()),
             "Memory",
             format!(
                 "{} of {}",
@@ -1112,7 +1184,7 @@ fn stats_card(dock: &Dock, readings: Option<&Readings>, palette: Palette) -> Any
             palette,
         ))
         .child(meter(
-            IconName::HardDrive,
+            Some(IconName::HardDrive.path()),
             "Storage",
             format!(
                 "{} free",

@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@sidekick/sdk",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["bun"],
+    "paths": {
+      "@sidekick/sdk": ["./src/index.ts"],
+      "@sidekick/sdk/*": ["./src/*.ts"]
+    }
+  },
+  "include": ["src", "test"]
+}

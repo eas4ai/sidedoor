@@ -26,10 +26,16 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemConfig {
-    App { bundle_id: String },
+    App {
+        bundle_id: String,
+    },
     Weather,
     Stats,
     Clipboard,
+    /// A plugin from the plugins folder, by folder name.
+    Plugin {
+        id: String,
+    },
 }
 
 /// Light or dark, or whatever macOS is set to.

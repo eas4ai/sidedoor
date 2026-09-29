@@ -8,6 +8,7 @@ use crate::{
     dock::{Dock, Services},
     geometry::{self, Edge, Point},
     platform::{LoginItem, Platform, fake::FakePlatform},
+    plugin::{HostMessage, Incoming, PluginMessage},
     settings_window::{SettingsEvent, SettingsWindow, Tab},
     views::{CardChrome, CardView, DockView},
     weather::Place,
@@ -68,6 +69,7 @@ fn setup(cx: &mut TestAppContext, items: Vec<ItemConfig>) -> Harness {
                 cx,
             )
         });
+        dock.update(cx, |dock, cx| dock.start_plugins(cx));
         let frame = dock.read(cx).frame();
         let (dock_window, _) = gpui_kit::open_window(
             options(frame.width as f32, frame.height as f32),
@@ -933,4 +935,115 @@ fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
         assert!(window.try_find(("place", 0usize)).is_none());
     })
     .unwrap();
+}
+
+// MARK: Plugins
+
+fn plugin_renders(h: &Harness, cx: &mut TestAppContext, surface: &str, tree: serde_json::Value) {
+    h.platform.plugin_says(
+        "counter",
+        Incoming::Message(PluginMessage::Render {
+            surface: surface.into(),
+            tree: serde_json::from_value(tree).unwrap(),
+        }),
+    );
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    plugin_renders(
+        &h,
+        cx,
+        "card",
+        serde_json::json!([{ "t": "Card", "p": { "title": "Counter" }, "c": [
+            { "t": "div", "p": { "id": "box", "w": 120, "h": 30, "bg": "blue", "rounded": 8,
+                                 "on_click": { "$h": "card:W/box#on_click" } }, "c": ["3"] },
+            { "t": "Button", "p": { "id": "add", "label": "Add", "variant": "primary",
+                                    "on_click": { "$h": "card:W/add#on_click" } }, "c": [] },
+            { "t": "Switch", "p": { "id": "sound", "checked": false,
+                                    "on_change": { "$h": "card:W/sound#on_change" } }, "c": [] }
+        ]}]),
+    );
+
+    h.reveal(cx);
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("plugin:counter", cx);
+    })
+    .unwrap();
+    cx.update_window(h.card_window, |_, window, cx| {
+        window.render_frame(cx);
+        // Custom styles land as written.
+        let size = window.find("plugin:counter:box").bounds().size;
+        assert_eq!((size.width, size.height), (px(120.0), px(30.0)));
+        window.click("plugin:counter:add", cx);
+        window.click("plugin:counter:box", cx);
+        window.click("plugin:counter:sound", cx);
+    })
+    .unwrap();
+
+    let sent = h.platform.plugin_sent.borrow();
+    let events: Vec<(String, serde_json::Value)> = sent
+        .iter()
+        .map(|(plugin, HostMessage::Event { handler, value })| {
+            assert_eq!(plugin, "counter");
+            (handler.clone(), value.clone())
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            ("card:W/add#on_click".to_string(), serde_json::Value::Null),
+            ("card:W/box#on_click".to_string(), serde_json::Value::Null),
+            (
+                "card:W/sound#on_change".to_string(),
+                serde_json::Value::Bool(true)
+            ),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn plugins_show_their_problems_and_can_be_added_from_settings(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![ItemConfig::Weather]);
+    h.press(cx, "cmd-3");
+    h.click(cx, "add-plugin:counter");
+    assert_eq!(h.item_ids(cx), ["weather", "plugin:counter"]);
+    assert_eq!(
+        h.platform
+            .saved_configs
+            .borrow()
+            .last()
+            .unwrap()
+            .items
+            .last(),
+        Some(&ItemConfig::Plugin {
+            id: "counter".into()
+        })
+    );
+
+    // Bun's compile errors show up in the card instead of a blank.
+    h.platform.plugin_says(
+        "counter",
+        Incoming::Log("error: Expected \">\" but found \"}\"".into()),
+    );
+    cx.run_until_parked();
+    let problem = cx.update(|cx| {
+        h.dock
+            .read(cx)
+            .plugin("counter")
+            .and_then(|state| state.problem.clone())
+    });
+    assert_eq!(problem.as_deref(), Some("Expected \">\" but found \"}\""));
+
+    // Removing it stops it.
+    h.click(cx, "remove:plugin:counter");
+    assert!(cx.update(|cx| h.dock.read(cx).plugin("counter").is_none()));
 }

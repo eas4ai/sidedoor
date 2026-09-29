@@ -10,6 +10,8 @@ mod hotkeys;
 mod macos;
 mod motion;
 mod platform;
+mod plugin;
+mod plugin_ui;
 mod settings_window;
 mod shortcut;
 mod shortcut_recorder;
@@ -30,8 +32,7 @@ use geometry::{CardPlacement, Rect};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, FontWeight, Refineable as _,
     StyleRefinement, Styled as _, TextRun, TitlebarOptions, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, assets::icon_assets, base::Root, font, point, px,
-    size, transparent_black,
+    WindowBounds, WindowKind, WindowOptions, base::Root, font, point, px, size, transparent_black,
 };
 use hotkeys::{HotKeys, RegisterError};
 use objc2::rc::Retained;
@@ -44,42 +45,6 @@ use views::{
     AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem, OpenSettings,
     RemoveItem, RemoveShortcut, RevealItem,
 };
-
-icon_assets!(
-    AppAssets,
-    [
-        Sun,
-        Moon,
-        Cloud,
-        CloudSun,
-        CloudMoon,
-        CloudFog,
-        CloudDrizzle,
-        CloudRain,
-        CloudSnow,
-        CloudLightning,
-        CloudOff,
-        Cpu,
-        MemoryStick,
-        HardDrive,
-        Clipboard,
-        Link,
-        File,
-        FileText,
-        AppWindow,
-        Image,
-        Search,
-        CircleX,
-        Keyboard,
-        Settings,
-        PanelRight,
-        LayoutGrid,
-        GripVertical,
-        CircleMinus,
-        MapPin,
-        Check,
-    ]
-);
 
 fn panel_options(width: f64, height: f64) -> WindowOptions {
     WindowOptions {
@@ -700,6 +665,7 @@ fn run(cx: &mut App) -> Result<(), String> {
             cx,
         )
     });
+    dock.update(cx, |dock, cx| dock.start_plugins(cx));
     let chrome = cx.new(|_| CardChrome::default());
 
     let frame = dock.read(cx).frame();
@@ -843,10 +809,13 @@ fn relaunch() {
 }
 
 fn main() {
-    gpui_kit::application().with_assets(AppAssets).run(|cx| {
-        if let Err(err) = run(cx) {
-            eprintln!("sidekick: {err}");
-            cx.quit();
-        }
-    });
+    // Every Lucide icon, so plugins can use any of them by name.
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::AllAssets)
+        .run(|cx| {
+            if let Err(err) = run(cx) {
+                eprintln!("sidekick: {err}");
+                cx.quit();
+            }
+        });
 }

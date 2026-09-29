@@ -6,10 +6,12 @@ use crate::{
     config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation},
     geometry::{self, Edge, Rect, Reveal, Screen},
     platform::{Accessibility, AppInfo, LoginItem, Platform},
+    plugin::{HostMessage, Incoming, Manifest, Node, PluginLink, PluginMessage},
     shortcut::Shortcut,
     stats::{Sampler, Snapshot},
     weather::{self, Weather},
 };
+use futures::StreamExt as _;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
@@ -24,6 +26,7 @@ pub const STATS_INTERVAL: Duration = Duration::from_secs(2);
 const PASTEBOARD_INTERVAL: Duration = Duration::from_millis(500);
 const WEATHER_INTERVAL: Duration = Duration::from_secs(20 * 60);
 const WEATHER_RETRY: Duration = Duration::from_secs(60);
+const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 /// How long "Clear History" waits for its confirming second click.
 const CLEAR_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 /// How long a shortcut shows a widget's card before tucking the dock away.
@@ -42,9 +45,17 @@ pub enum ItemKind {
     Weather,
     Stats,
     Clipboard,
+    Plugin(Manifest),
 }
 
 impl DockItem {
+    fn plugin(manifest: Manifest) -> Self {
+        Self {
+            id: format!("plugin:{}", manifest.id).into(),
+            kind: ItemKind::Plugin(manifest),
+        }
+    }
+
     fn app(app: AppInfo) -> Self {
         Self {
             id: format!("app:{}", app.bundle_id).into(),
@@ -57,7 +68,9 @@ impl DockItem {
             ItemKind::Weather => "weather",
             ItemKind::Stats => "stats",
             ItemKind::Clipboard => "clipboard",
-            ItemKind::App(_) => unreachable!("apps use DockItem::app"),
+            ItemKind::App(_) | ItemKind::Plugin(_) => {
+                unreachable!("apps and plugins have their own constructors")
+            }
         };
         Self {
             id: id.into(),
@@ -73,8 +86,23 @@ impl DockItem {
             ItemKind::Weather => ItemConfig::Weather,
             ItemKind::Stats => ItemConfig::Stats,
             ItemKind::Clipboard => ItemConfig::Clipboard,
+            ItemKind::Plugin(manifest) => ItemConfig::Plugin {
+                id: manifest.id.clone(),
+            },
         }
     }
+}
+
+/// A plugin while it is in the dock: its process and what it last drew.
+pub struct PluginState {
+    pub tile: Option<Vec<Node>>,
+    pub card: Option<Vec<Node>>,
+    /// Why it isn't drawing, e.g. a compile error.
+    pub problem: Option<SharedString>,
+    link: Option<Box<dyn PluginLink>>,
+    /// The plugin's files when it started; a change reloads it.
+    fingerprint: u64,
+    _task: Option<Task<()>>,
 }
 
 /// A widget the dock can hold, at most once each.
@@ -157,6 +185,9 @@ pub struct Dock {
     live: bool,
     /// Refreshes the forecast for `location`; replaced when it changes.
     weather_task: Option<Task<()>>,
+    /// Running plugins, by plugin id.
+    plugins: BTreeMap<String, PluginState>,
+    _quit: Option<gpui_kit::Subscription>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -169,7 +200,7 @@ impl Dock {
         services: Services,
         cx: &mut Context<Self>,
     ) -> Self {
-        let items = resolve_items(&config.items, platform.as_ref());
+        let items = resolve_items(&config.items, platform.as_ref(), &platform.plugins());
         let shortcuts = config
             .shortcuts
             .iter()
@@ -187,7 +218,15 @@ impl Dock {
             tasks.push(every(SYSTEM_INTERVAL, cx, Self::poll_system));
             tasks.push(every(STATS_INTERVAL, cx, Self::poll_stats));
             tasks.push(every(PASTEBOARD_INTERVAL, cx, Self::poll_pasteboard));
+            tasks.push(every(PLUGIN_RELOAD_INTERVAL, cx, Self::poll_plugins));
         }
+        // Stop plugin processes with the app rather than leave them behind.
+        let quit = services.live.then(|| {
+            cx.on_app_quit(|this: &mut Self, _| {
+                this.plugins.clear();
+                async {}
+            })
+        });
         let weather_task = services
             .live
             .then(|| Self::weather_task(config.weather.clone(), cx));
@@ -215,7 +254,24 @@ impl Dock {
             reveal: Reveal::default(),
             live: services.live,
             weather_task,
+            plugins: BTreeMap::new(),
+            _quit: quit,
             _tasks: tasks,
+        }
+    }
+
+    /// Starts the plugins in the dock; call once the dock is an entity.
+    pub fn start_plugins(&mut self, cx: &mut Context<Self>) {
+        let manifests: Vec<Manifest> = self
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Plugin(manifest) => Some(manifest.clone()),
+                _ => None,
+            })
+            .collect();
+        for manifest in manifests {
+            self.start_plugin(&manifest, cx);
         }
     }
 
@@ -375,7 +431,11 @@ impl Dock {
 
     pub fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(index) = self.index_of(id) {
-            self.items.remove(index);
+            let item = self.items.remove(index);
+            if let ItemKind::Plugin(manifest) = &item.kind {
+                // Dropping its state stops the process.
+                self.plugins.remove(&manifest.id);
+            }
             if self.shortcuts.remove(id).is_some() {
                 cx.emit(DockEvent::ShortcutsChanged);
             }
@@ -400,6 +460,168 @@ impl Dock {
             .into_iter()
             .filter(|widget| self.index_of(&widget.item().id).is_none())
             .collect()
+    }
+
+    // MARK: Plugins
+
+    fn start_plugin(&mut self, manifest: &Manifest, cx: &mut Context<Self>) {
+        let fingerprint = if self.live {
+            crate::plugin::fingerprint(&manifest.dir)
+        } else {
+            0
+        };
+        // A reload keeps showing what the plugin last drew until it draws again.
+        let (tile, card) = self
+            .plugins
+            .remove(&manifest.id)
+            .map_or((None, None), |old| (old.tile, old.card));
+        let state = match self.platform.start_plugin(manifest) {
+            Ok(connection) => {
+                let id = manifest.id.clone();
+                let mut incoming = connection.incoming;
+                let task = cx.spawn(async move |this, cx| {
+                    while let Some(message) = incoming.next().await {
+                        let alive = this
+                            .update(cx, |this, cx| this.plugin_incoming(&id, message, cx))
+                            .is_ok();
+                        if !alive {
+                            break;
+                        }
+                    }
+                });
+                PluginState {
+                    tile,
+                    card,
+                    problem: None,
+                    link: Some(connection.link),
+                    fingerprint,
+                    _task: Some(task),
+                }
+            }
+            Err(problem) => PluginState {
+                tile,
+                card,
+                problem: Some(problem.into()),
+                link: None,
+                fingerprint,
+                _task: None,
+            },
+        };
+        self.plugins.insert(manifest.id.clone(), state);
+    }
+
+    fn plugin_incoming(&mut self, id: &str, incoming: Incoming, cx: &mut Context<Self>) {
+        let Some(state) = self.plugins.get_mut(id) else {
+            return;
+        };
+        match incoming {
+            Incoming::Message(PluginMessage::Render { surface, tree }) => {
+                match surface.as_str() {
+                    "tile" => state.tile = Some(tree),
+                    _ => state.card = Some(tree),
+                }
+                state.problem = None;
+            }
+            Incoming::Message(PluginMessage::Error { message }) => {
+                eprintln!("sidekick: plugin {id}: {message}");
+                state.problem = Some(
+                    message
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                        .into(),
+                );
+            }
+            Incoming::Message(PluginMessage::OpenUrl { url }) => {
+                self.open_path(std::path::Path::new(&url));
+                return;
+            }
+            Incoming::Message(PluginMessage::OpenPath { path }) => {
+                self.open_path(std::path::Path::new(&path));
+                return;
+            }
+            Incoming::Message(PluginMessage::Copy { text }) => {
+                self.platform.write_pasteboard(&ClipKind::Text { text });
+                return;
+            }
+            Incoming::Log(line) => {
+                eprintln!("[{id}] {line}");
+                // Bun reports compile and runtime failures as `error: …`.
+                if let Some(message) = line.trim_start().strip_prefix("error:") {
+                    state.problem = Some(message.trim().to_string().into());
+                } else {
+                    return;
+                }
+            }
+            Incoming::Exited => {
+                state.link = None;
+                if state.problem.is_none() {
+                    state.problem = Some("The plugin stopped.".into());
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Reloads plugins whose files changed, as on save.
+    fn poll_plugins(&mut self, cx: &mut Context<Self>) {
+        let changed: Vec<Manifest> = self
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Plugin(manifest) => Some(manifest),
+                _ => None,
+            })
+            .filter(|manifest| {
+                self.plugins.get(&manifest.id).is_some_and(|state| {
+                    state.fingerprint != crate::plugin::fingerprint(&manifest.dir)
+                })
+            })
+            .cloned()
+            .collect();
+        for manifest in changed {
+            self.start_plugin(&manifest, cx);
+            cx.notify();
+        }
+    }
+
+    pub fn plugin(&self, id: &str) -> Option<&PluginState> {
+        self.plugins.get(id)
+    }
+
+    /// Passes an event from a plugin's UI back to its handler.
+    pub fn plugin_event(&mut self, id: &str, handler: &str, value: serde_json::Value) {
+        if let Some(link) = self
+            .plugins
+            .get_mut(id)
+            .and_then(|state| state.link.as_mut())
+        {
+            link.send(&HostMessage::Event {
+                handler: handler.to_string(),
+                value,
+            });
+        }
+    }
+
+    /// Installed plugins that aren't in the dock.
+    pub fn available_plugins(&self) -> Vec<Manifest> {
+        self.platform
+            .plugins()
+            .into_iter()
+            .filter(|manifest| self.index_of(&format!("plugin:{}", manifest.id)).is_none())
+            .collect()
+    }
+
+    pub fn add_plugin(&mut self, manifest: Manifest, cx: &mut Context<Self>) -> bool {
+        let item = DockItem::plugin(manifest.clone());
+        if self.items.len() >= MAX_ITEMS || self.index_of(&item.id).is_some() {
+            return false;
+        }
+        self.items.push(item);
+        self.start_plugin(&manifest, cx);
+        self.items_changed(cx);
+        true
     }
 
     // MARK: Settings
@@ -485,6 +707,7 @@ impl Dock {
             Some(ItemKind::Weather) => "Weather".into(),
             Some(ItemKind::Stats) => "Stats".into(),
             Some(ItemKind::Clipboard) => "Clipboard".into(),
+            Some(ItemKind::Plugin(manifest)) => manifest.name.clone(),
             None => id.to_string(),
         }
     }
@@ -511,7 +734,7 @@ impl Dock {
         };
         match self.items[index].kind {
             ItemKind::App(_) | ItemKind::Clipboard => self.activate(index, cx),
-            ItemKind::Weather | ItemKind::Stats => self.peek(index, cx),
+            ItemKind::Weather | ItemKind::Stats | ItemKind::Plugin(_) => self.peek(index, cx),
         }
     }
 
@@ -773,7 +996,11 @@ fn every(
     })
 }
 
-fn resolve_items(configs: &[ItemConfig], platform: &dyn Platform) -> Vec<DockItem> {
+fn resolve_items(
+    configs: &[ItemConfig],
+    platform: &dyn Platform,
+    plugins: &[Manifest],
+) -> Vec<DockItem> {
     let mut seen = HashSet::new();
     configs
         .iter()
@@ -789,6 +1016,15 @@ fn resolve_items(configs: &[ItemConfig], platform: &dyn Platform) -> Vec<DockIte
                 ItemConfig::Weather => DockItem::widget(ItemKind::Weather),
                 ItemConfig::Stats => DockItem::widget(ItemKind::Stats),
                 ItemConfig::Clipboard => DockItem::widget(ItemKind::Clipboard),
+                ItemConfig::Plugin { id } => {
+                    match plugins.iter().find(|manifest| &manifest.id == id) {
+                        Some(manifest) => DockItem::plugin(manifest.clone()),
+                        None => {
+                            eprintln!("sidekick: skipping plugin {id}, it isn't installed");
+                            return None;
+                        }
+                    }
+                }
             };
             // Duplicates are skipped, as in Sidekick.
             seen.insert(item.id.clone()).then_some(item)

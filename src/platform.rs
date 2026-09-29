@@ -5,6 +5,7 @@ use crate::{
     clipboard::{ClipKind, History},
     config::{Appearance, Config},
     geometry::{Point, Screen},
+    plugin::{Connection, Manifest},
 };
 use std::{
     collections::HashSet,
@@ -79,6 +80,10 @@ pub trait Platform {
     fn set_appearance(&self, appearance: Appearance);
     fn login_item(&self) -> LoginItem;
     fn set_launch_at_login(&self, enabled: bool) -> Result<(), String>;
+
+    /// Plugins installed in the plugins folder.
+    fn plugins(&self) -> Vec<Manifest>;
+    fn start_plugin(&self, manifest: &Manifest) -> Result<Connection, String>;
 }
 
 /// Where the clone keeps its files.
@@ -99,7 +104,23 @@ pub mod fake {
     //! An in-memory platform for tests.
 
     use super::*;
-    use std::cell::RefCell;
+    use crate::plugin::{HostMessage, Incoming, PluginLink};
+    use futures::channel::mpsc::{UnboundedSender, unbounded};
+    use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+    /// Records what the host sends a fake plugin.
+    struct Recorder {
+        id: String,
+        sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
+    }
+
+    impl PluginLink for Recorder {
+        fn send(&mut self, message: &HostMessage) {
+            self.sent
+                .borrow_mut()
+                .push((self.id.clone(), message.clone()));
+        }
+    }
 
     #[derive(Default)]
     pub struct FakePlatform {
@@ -113,6 +134,10 @@ pub mod fake {
         pub saved_configs: RefCell<Vec<Config>>,
         pub appearance: RefCell<Option<Appearance>>,
         pub login: RefCell<LoginItem>,
+        pub plugins: RefCell<Vec<Manifest>>,
+        /// Lets a test speak as each started plugin.
+        pub plugin_inbox: RefCell<HashMap<String, UnboundedSender<Incoming>>>,
+        pub plugin_sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
     }
 
     impl FakePlatform {
@@ -131,7 +156,23 @@ pub mod fake {
                     icon: None,
                 })
                 .collect();
+            *fake.plugins.borrow_mut() = vec![Manifest {
+                id: "counter".into(),
+                name: "Counter".into(),
+                icon: "timer".into(),
+                width: 260.0,
+                height: 200.0,
+                dir: PathBuf::from("/plugins/counter"),
+                main: PathBuf::from("index.tsx"),
+            }];
             fake
+        }
+
+        /// Delivers `incoming` as if plugin `id` had sent it.
+        pub fn plugin_says(&self, id: &str, incoming: Incoming) {
+            self.plugin_inbox.borrow()[id]
+                .unbounded_send(incoming)
+                .expect("the plugin is running");
         }
 
         pub fn copy(&self, kind: ClipKind) {
@@ -205,6 +246,22 @@ pub mod fake {
                 LoginItem::Off
             };
             Ok(())
+        }
+        fn plugins(&self) -> Vec<Manifest> {
+            self.plugins.borrow().clone()
+        }
+        fn start_plugin(&self, manifest: &Manifest) -> Result<Connection, String> {
+            let (sender, incoming) = unbounded();
+            self.plugin_inbox
+                .borrow_mut()
+                .insert(manifest.id.clone(), sender);
+            Ok(Connection {
+                link: Box::new(Recorder {
+                    id: manifest.id.clone(),
+                    sent: self.plugin_sent.clone(),
+                }),
+                incoming,
+            })
         }
     }
 }

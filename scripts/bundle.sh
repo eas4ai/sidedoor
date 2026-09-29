@@ -28,6 +28,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "target/release/$EXECUTABLE" "$APP/Contents/MacOS/$EXECUTABLE"
 
+# The plugin SDK, which plugins import as `@sidekick/sdk`.
+mkdir -p "$APP/Contents/Resources/sdk"
+cp -R sdk/package.json sdk/tsconfig.json sdk/README.md sdk/src "$APP/Contents/Resources/sdk/"
+
 # App icon: every size macOS asks for, rendered from the SVG.
 ICONSET="$OUT/AppIcon.iconset"
 rm -rf "$ICONSET"

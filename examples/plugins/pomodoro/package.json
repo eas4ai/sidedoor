@@ -1,0 +1,11 @@
+{
+  "name": "pomodoro",
+  "private": true,
+  "main": "index.tsx",
+  "sidekick": {
+    "name": "Pomodoro",
+    "icon": "timer",
+    "width": 290,
+    "height": 176
+  }
+}

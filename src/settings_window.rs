@@ -834,6 +834,7 @@ fn item_icon(item: &DockItem, palette: Palette) -> AnyElement {
         ItemKind::Weather => palette.blue,
         ItemKind::Clipboard => palette.purple,
         ItemKind::Stats => palette.green,
+        ItemKind::Plugin(_) => palette.orange,
         ItemKind::App(_) => palette.fill,
     };
     div()
@@ -1027,6 +1028,22 @@ fn items_page(
                     });
                 },
             ),
+            palette,
+        ));
+    }
+
+    for manifest in dock.available_plugins() {
+        let handler = dock_entity.clone();
+        let id = SharedString::from(format!("add-plugin:{}", manifest.id));
+        additions.push(row(
+            manifest.name.clone(),
+            Some(format!("Plugin · {}", manifest.dir.display()).into()),
+            push_button(id, "Add", palette, room, false, move |_, cx| {
+                let manifest = manifest.clone();
+                handler.update(cx, |dock, cx| {
+                    dock.add_plugin(manifest, cx);
+                });
+            }),
             palette,
         ));
     }

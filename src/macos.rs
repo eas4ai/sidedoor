@@ -347,6 +347,23 @@ impl Platform for MacPlatform {
     fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
         set_launch_at_login(enabled)
     }
+
+    fn plugins(&self) -> Vec<crate::plugin::Manifest> {
+        crate::plugin::discover(&crate::plugin::plugins_dir())
+    }
+
+    fn start_plugin(
+        &self,
+        manifest: &crate::plugin::Manifest,
+    ) -> Result<crate::plugin::Connection, String> {
+        static BUN: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        let bun = BUN
+            .get_or_init(crate::plugin::find_bun)
+            .as_ref()
+            .ok_or("Plugins need Bun. Install it from bun.sh, then reload.")?;
+        crate::plugin::spawn(manifest, bun, &crate::plugin::sdk_dir())
+            .map_err(|err| format!("Couldn't start {}: {err}", manifest.name))
+    }
 }
 
 fn app_info(bundle_id: String, path: PathBuf) -> AppInfo {
