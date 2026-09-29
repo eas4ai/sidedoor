@@ -183,6 +183,10 @@ impl Platform for LinuxPlatform {
         self.app_info(id, path)
     }
 
+    fn installed_apps(&self) -> Vec<AppInfo> {
+        apps::installed()
+    }
+
     fn open(&self, path: &Path) -> io::Result<()> {
         if path.extension().is_some_and(|ext| ext == "desktop") {
             apps::launch(path)

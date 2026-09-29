@@ -23,6 +23,8 @@ pub struct DesktopEntry {
     pub terminal: bool,
     pub application: bool,
     pub hidden: bool,
+    /// Kept out of launchers, like settings panels and helpers.
+    pub no_display: bool,
 }
 
 impl DesktopEntry {
@@ -51,6 +53,7 @@ impl DesktopEntry {
                 "Terminal" => entry.terminal = value == "true",
                 "Type" => entry.application = value == "Application",
                 "Hidden" => entry.hidden = value == "true",
+                "NoDisplay" => entry.no_display = value == "true",
                 _ => {}
             }
         }
@@ -221,6 +224,55 @@ pub fn app_info(id: String, path: PathBuf) -> Option<AppInfo> {
     })
 }
 
+/// Every application a launcher lists, by name. The first entry with an ID
+/// wins, as in the XDG lookup order. Icons are the theme's files, not the
+/// cached renderings the dock uses.
+pub fn installed() -> Vec<AppInfo> {
+    let mut seen = HashSet::new();
+    let mut apps = Vec::new();
+    for dir in data_dirs() {
+        let root = dir.join("applications");
+        let mut pending = vec![root.clone()];
+        while let Some(folder) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let Some(id) = path
+                    .strip_prefix(&root)
+                    .ok()
+                    .and_then(|relative| relative.to_str()?.strip_suffix(".desktop"))
+                    .map(|relative| relative.replace('/', "-"))
+                else {
+                    continue;
+                };
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                let Some(desktop) = read_entry(&path) else {
+                    continue;
+                };
+                if desktop.no_display || desktop.name.is_empty() || desktop.exec.is_none() {
+                    continue;
+                }
+                apps.push(AppInfo {
+                    bundle_id: id,
+                    name: desktop.name.clone(),
+                    icon: desktop.icon.as_deref().and_then(find_icon),
+                    path,
+                });
+            }
+        }
+    }
+    apps.sort_by_key(|app| app.name.to_lowercase());
+    apps
+}
+
 /// Launches a desktop entry the way a launcher does, detached from us.
 pub fn launch(path: &Path) -> io::Result<()> {
     let entry = read_entry(path)
@@ -344,6 +396,11 @@ pub fn find_icon(name: &str) -> Option<PathBuf> {
 }
 
 fn icon_theme() -> Option<String> {
+    static THEME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    THEME.get_or_init(read_icon_theme).clone()
+}
+
+fn read_icon_theme() -> Option<String> {
     let output = std::process::Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "icon-theme"])
         .stderr(std::process::Stdio::null())

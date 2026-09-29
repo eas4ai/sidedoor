@@ -78,6 +78,11 @@ pub trait Platform {
     fn app_by_bundle_id(&self, bundle_id: &str) -> Option<AppInfo>;
     /// The app bundle at `path`, e.g. one dropped from Finder.
     fn app_at(&self, path: &Path) -> Option<AppInfo>;
+    /// Every app a launcher would list, for platforms where the app picker
+    /// lists them itself (Linux) rather than asking the system file panel.
+    fn installed_apps(&self) -> Vec<AppInfo> {
+        Vec::new()
+    }
     fn open(&self, path: &Path) -> io::Result<()>;
     fn reveal_in_finder(&self, path: &Path);
     /// Moves a file or folder to the Trash (the Recycle Bin on Windows).

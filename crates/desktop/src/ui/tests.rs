@@ -2104,3 +2104,44 @@ fn plugin_windows_open_draw_and_close(cx: &mut TestAppContext) {
         })
     );
 }
+
+#[gpui_kit::test]
+fn app_picker_lists_installed_apps_and_adds_them(cx: &mut TestAppContext) {
+    use crate::ui::settings::app_picker::{AppPicker, WINDOW_SIZE};
+    let h = setup(cx, vec![app("com.example.alpha")]);
+    let window = cx.update(|cx| {
+        let (width, height) = WINDOW_SIZE;
+        gpui_kit::open_window(options(width, height), cx, |window, cx| {
+            cx.new(|cx| AppPicker::new(h.dock.clone(), window, cx))
+        })
+        .unwrap()
+        .0
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // An app already in the dock says so instead of offering to add it.
+        assert!(window.try_find("pick:com.example.alpha").is_none());
+        window.click("pick:com.example.beta", cx);
+    })
+    .unwrap();
+    let ids: Vec<String> = cx.update(|cx| {
+        h.dock
+            .read(cx)
+            .items
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect()
+    });
+    assert_eq!(ids, ["app:com.example.alpha", "app:com.example.beta"]);
+
+    // Typing narrows the list by name.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("app-search", cx);
+        window.input("gam", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("pick:com.example.gamma").is_some());
+        assert!(window.try_find("pick:com.example.delta").is_none());
+    })
+    .unwrap();
+}

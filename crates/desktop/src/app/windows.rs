@@ -565,6 +565,75 @@ pub(super) fn open_settings(
     Ok(())
 }
 
+/// The Add Apps window, while it is open.
+#[derive(Default)]
+pub(super) struct AppPickerState {
+    pub(super) handle: Option<AnyWindowHandle>,
+}
+
+pub(super) fn open_app_picker(
+    dock: &Entity<Dock>,
+    state: &Rc<RefCell<AppPickerState>>,
+    cx: &mut App,
+) -> Result<(), String> {
+    use crate::ui::settings::app_picker::{self, AppPicker, AppPickerEvent};
+    let existing = state.borrow().handle;
+    if let Some(handle) = existing
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        return Ok(());
+    }
+    let (width, height) = app_picker::WINDOW_SIZE;
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(width), px(height)),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Add Apps".into()),
+            appears_transparent: false,
+            traffic_light_position: None,
+        }),
+        window_min_size: Some(size(px(320.0), px(300.0))),
+        is_minimizable: false,
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| AppPicker::new(dock.clone(), window, cx))
+    })
+    .map_err(|err| err.to_string())?;
+    handle
+        .update(cx, |_, window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                root.style()
+                    .refine(&StyleRefinement::default().bg(transparent_black()));
+            });
+            if let Some(native) = native::window_handle(window) {
+                native::add_window_material(&native);
+            }
+            window.activate_window();
+        })
+        .ok();
+    let closing = state.clone();
+    cx.subscribe(&view, move |_, event: &AppPickerEvent, cx| {
+        let handle = closing.borrow_mut().handle.take();
+        if *event == AppPickerEvent::Dismiss
+            && let Some(handle) = handle
+        {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+    })
+    .detach();
+    state.borrow_mut().handle = Some(handle);
+    Ok(())
+}
+
 /// Opens the settings file in the user's default text editor.
 pub(super) fn open_config_file() {
     let opened = native::open_config(&services::storage::config_path());

@@ -76,6 +76,11 @@ pub struct RemoveShortcut {
 #[action(namespace = sidedoor, no_json)]
 pub struct OpenSettings;
 
+/// Opens the list of installed apps to add to the dock (Linux).
+#[derive(Clone, Default, PartialEq, Action)]
+#[action(namespace = sidedoor, no_json)]
+pub struct AddApps;
+
 /// Opens the settings file in the user's text editor.
 #[derive(Clone, Default, PartialEq, Action)]
 #[action(namespace = sidedoor, no_json)]

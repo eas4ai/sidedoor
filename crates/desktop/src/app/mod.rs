@@ -28,8 +28,8 @@ use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
 use shortcuts::*;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use views::{
-    AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem, OpenSettings,
-    RemoveItem, RemoveShortcut, RevealItem, RunPluginAction,
+    AddApps, AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem,
+    OpenSettings, RemoveItem, RemoveShortcut, RevealItem, RunPluginAction,
 };
 use windows::*;
 
@@ -163,6 +163,15 @@ fn init(cx: &mut App) -> Result<(), String> {
         }
     });
     cx.on_action(|_: &OpenConfigFile, _| open_config_file());
+    let (handler, picker) = (
+        dock.clone(),
+        Rc::new(RefCell::new(AppPickerState::default())),
+    );
+    cx.on_action(move |_: &AddApps, cx| {
+        if let Err(err) = open_app_picker(&handler, &picker, cx) {
+            eprintln!("sidedoor: couldn't open the app list: {err}");
+        }
+    });
 
     let status = status_menu::StatusMenu::install({
         let cx = cx.to_async();

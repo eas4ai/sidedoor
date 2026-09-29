@@ -28,6 +28,8 @@ pub const STATS_INTERVAL: Duration = Duration::from_secs(2);
 const PASTEBOARD_INTERVAL: Duration = Duration::from_millis(500);
 const WEATHER_INTERVAL: Duration = Duration::from_secs(20 * 60);
 const WEATHER_RETRY: Duration = Duration::from_secs(60);
+/// How often the weather task checks whether anything shows weather yet.
+const WEATHER_WAIT: Duration = Duration::from_secs(1);
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 /// How long "Clear History" waits for its confirming second click.
 const CLEAR_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
@@ -362,6 +364,15 @@ impl Dock {
 
     pub fn is_running(&self, app: &AppInfo) -> bool {
         self.running.contains(&app.bundle_id)
+    }
+
+    /// Installed apps, where the app picker lists them itself.
+    pub fn installed_apps(&self) -> Vec<AppInfo> {
+        self.platform.installed_apps()
+    }
+
+    pub fn has_app(&self, bundle_id: &str) -> bool {
+        self.index_of(&format!("app:{bundle_id}")).is_some()
     }
 
     pub fn index_of(&self, id: &str) -> Option<usize> {
@@ -1551,7 +1562,9 @@ impl Dock {
                     }
                     delay
                 } else {
-                    WEATHER_RETRY
+                    // Nothing shows weather yet; at launch the plugin is still
+                    // starting, so look again soon rather than in a minute.
+                    WEATHER_WAIT
                 };
                 cx.background_executor().timer(delay).await;
             }

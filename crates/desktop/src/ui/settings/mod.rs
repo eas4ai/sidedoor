@@ -645,6 +645,7 @@ fn glyph(name: IconName, size: f32, color: Hsla) -> impl IntoElement {
 
 // MARK: Pages
 
+pub(crate) mod app_picker;
 mod dock;
 mod general;
 mod items;
