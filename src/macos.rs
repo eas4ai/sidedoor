@@ -293,6 +293,10 @@ impl Platform for MacPlatform {
         Some(Copied { kind, source })
     }
 
+    fn notify(&self, source: &str, title: &str, body: &str) {
+        crate::notifications::show(source, title, body);
+    }
+
     fn write_pasteboard(&self, kind: &ClipKind) {
         let pasteboard = NSPasteboard::generalPasteboard();
         pasteboard.clearContents();

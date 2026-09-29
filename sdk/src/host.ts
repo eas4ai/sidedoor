@@ -11,12 +11,17 @@ import {
   setInvalidateHandler,
   type Patch,
 } from "./runtime";
+import { createStorage } from "./storage";
 import type { Component, IconName, Node } from "./types";
 
 /** Messages the app sends a plugin. */
 export type HostMessage =
   | { type: "event"; handler: string; value?: unknown }
   | { type: "card"; open: boolean }
+  /** The dock tile was clicked, or the item's shortcut pressed. */
+  | { type: "click" }
+  /** A command from the item's context menu. */
+  | { type: "action"; key: string }
   | { type: "settings"; values: Record<string, unknown> }
   /** The app lost track of a surface; send everything again. */
   | { type: "resync" };
@@ -29,6 +34,7 @@ export type PluginMessage =
   | { type: "open_url"; url: string }
   | { type: "open_path"; path: string }
   | { type: "copy"; text: string }
+  | { type: "notify"; title: string; body: string }
   | { type: "log"; line: string }
   | { type: "error"; message: string };
 
@@ -57,6 +63,11 @@ function parseSettings(json: string | undefined): Record<string, unknown> {
   }
 }
 
+const storage = createStorage(
+  env.SIDEDOOR_DATA_DIR ? `${env.SIDEDOOR_DATA_DIR}/storage.json` : null,
+  invalidate,
+);
+
 function send(message: PluginMessage) {
   scope.postMessage(message);
 }
@@ -78,11 +89,33 @@ export function useSetting<T = unknown>(key: string): T {
   return (key in state.saved ? state.saved[key] : state.defaults[key]) as T;
 }
 
+/**
+ * A value saved in the plugin's data folder, which survives reloads and
+ * restarts. Like `useState`, but every component that reads `key` shares
+ * it. Values must be JSON.
+ */
+export function useStorage<T>(
+  key: string,
+  initial: T,
+): [T, (value: T | ((previous: T) => T)) => void] {
+  const value = storage.has(key) ? (storage.get(key) as T) : initial;
+  const set = (next: T | ((previous: T) => T)) => {
+    const previous = storage.has(key) ? (storage.get(key) as T) : initial;
+    storage.set(key, typeof next === "function" ? (next as (previous: T) => T)(previous) : next);
+  };
+  return [value, set];
+}
+
 /** Things a widget can ask the app to do. */
 export const sidedoor = {
   openUrl: (url: string) => send({ type: "open_url", url }),
   open: (path: string) => send({ type: "open_path", path }),
   copy: (text: string) => send({ type: "copy", text }),
+  /** Shows a banner in Notification Center, under the plugin's name. */
+  notify: ({ title, body = "" }: { title: string; body?: string }) =>
+    send({ type: "notify", title, body }),
+  /** What `useStorage` saves, for use outside render. */
+  storage,
   /** A folder the plugin can keep files in. */
   dataDir: env.SIDEDOOR_DATA_DIR ?? "",
   /** The plugin's settings right now. */
@@ -115,6 +148,19 @@ export interface PluginDefinition {
   tile?: Component;
   /** Drawn in the card that opens on hover. */
   card: Component;
+  /**
+   * Runs when the dock tile is clicked. With it, the item's global shortcut
+   * clicks too, instead of showing the card.
+   */
+  onClick?: () => void;
+  /** Commands for the item's context menu, by key. */
+  actions?: Record<string, PluginAction>;
+}
+
+/** A command in the dock item's context menu. */
+export interface PluginAction {
+  title: string;
+  run: () => void;
 }
 
 /** What the app learns about a plugin when it starts. */
@@ -124,6 +170,8 @@ export interface Manifest {
   width: number;
   height: number | null;
   settings: Array<{ key: string } & SettingDefinition>;
+  clickable: boolean;
+  actions: Array<{ key: string; title: string }>;
 }
 
 function defaultOf(setting: SettingDefinition): unknown {
@@ -153,6 +201,11 @@ export function describe(definition: PluginDefinition): {
       width: definition.width ?? 280,
       height: definition.height ?? null,
       settings: settings.map(([key, setting]) => ({ key, ...setting })),
+      clickable: definition.onClick !== undefined,
+      actions: Object.entries(definition.actions ?? {}).map(([key, action]) => ({
+        key,
+        title: action.title,
+      })),
     },
     defaults: Object.fromEntries(settings.map(([key, setting]) => [key, defaultOf(setting)])),
   };
@@ -209,15 +262,27 @@ function start(definition: PluginDefinition) {
   setInvalidateHandler(render);
   render();
 
+  const guarded = (run: () => void) => {
+    try {
+      run();
+    } catch (error) {
+      send({ type: "error", message: describeError(error) });
+    }
+  };
+
   scope.addEventListener("message", ({ data: message }) => {
     switch (message.type) {
       case "event":
-        try {
-          dispatch(message.handler, message.value);
-        } catch (error) {
-          send({ type: "error", message: describeError(error) });
-        }
+        guarded(() => dispatch(message.handler, message.value));
         break;
+      case "click":
+        if (definition.onClick) guarded(definition.onClick);
+        break;
+      case "action": {
+        const action = definition.actions?.[message.key];
+        if (action) guarded(action.run);
+        break;
+      }
       case "card":
         state.cardOpen = message.open;
         break;

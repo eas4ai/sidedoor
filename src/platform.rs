@@ -73,6 +73,10 @@ pub trait Platform {
     fn read_pasteboard(&self, image_dir: &Path) -> Option<Copied>;
     fn write_pasteboard(&self, kind: &ClipKind);
 
+    /// Shows a notification in Notification Center; `source` names the
+    /// plugin that sent it.
+    fn notify(&self, source: &str, title: &str, body: &str);
+
     fn save_config(&self, config: &Config) -> io::Result<()>;
     fn save_history(&self, history: &History) -> io::Result<()>;
 
@@ -166,6 +170,8 @@ pub mod fake {
         pub opened: RefCell<Vec<PathBuf>>,
         pub pasteboard: RefCell<(isize, Option<Copied>)>,
         pub written: RefCell<Vec<ClipKind>>,
+        /// Notifications shown: source, title and body.
+        pub notified: RefCell<Vec<[String; 3]>>,
         pub saved_configs: RefCell<Vec<Config>>,
         pub appearance: RefCell<Option<Appearance>>,
         pub login: RefCell<LoginItem>,
@@ -206,6 +212,11 @@ pub mod fake {
                     kind: crate::plugin::SettingKind::Text,
                     options: Vec::new(),
                     default: Some(serde_json::Value::from("clicks")),
+                }],
+                clickable: true,
+                actions: vec![crate::plugin::PluginAction {
+                    key: "reset".into(),
+                    title: "Reset Counter".into(),
                 }],
                 dir: PathBuf::from("/plugins/counter"),
                 main: PathBuf::from("index.tsx"),
@@ -271,6 +282,11 @@ pub mod fake {
         fn write_pasteboard(&self, kind: &ClipKind) {
             self.written.borrow_mut().push(kind.clone());
         }
+        fn notify(&self, source: &str, title: &str, body: &str) {
+            self.notified
+                .borrow_mut()
+                .push([source, title, body].map(String::from));
+        }
         fn save_config(&self, config: &Config) -> io::Result<()> {
             self.saved_configs.borrow_mut().push(config.clone());
             Ok(())
@@ -323,6 +339,8 @@ pub mod fake {
                 width: 280.0,
                 height: None,
                 settings: Vec::new(),
+                clickable: false,
+                actions: Vec::new(),
                 dir: PathBuf::from(format!("/plugins/{}", name.to_lowercase())),
                 main: PathBuf::from("index.tsx"),
             };

@@ -50,6 +50,7 @@ export default definePlugin({
 - `height`: optional. Leave it out and the card fits its content, up to 600 points.
 - `settings`: optional. See [Settings](#settings).
 - `card` and `tile`: see [Surfaces](#surfaces).
+- `onClick` and `actions`: optional. See [Clicks and commands](#clicks-and-commands).
 
 There is no JSON to write. The app lists a plugin by reading `name` and
 `icon` from the file as text, without running it, and learns the rest when
@@ -83,6 +84,23 @@ See [`examples/plugins/pomodoro`](examples/plugins/pomodoro) for a full widget w
 Both are rendered all the time, not only while visible. Put timers in one
 of them only. `useCardOpen()` tells you whether the card is showing, which
 helps you refresh data when it opens or pause work while it's hidden.
+
+## Clicks and commands
+
+```tsx
+definePlugin({
+  onClick: () => timer.toggle(),
+  actions: {
+    reset: { title: "Reset Timer", run: () => timer.reset() },
+  },
+  …
+});
+```
+
+- `onClick` runs when you click the dock tile. With it, the item's global
+  shortcut (**Assign Shortcut…** in its context menu) clicks too, instead
+  of showing the card.
+- `actions` go at the top of the item's context menu, in order.
 
 ## Elements
 
@@ -175,6 +193,11 @@ work as they do in React. To share state between the tile and the card, use
 `createStore(initial)`: read it with `.use()` during render and change it with
 `.set(value | fn)`.
 
+`useStorage(key, initial)` works like `useState`, but the value is saved in
+the plugin's data folder, so it survives reloads and restarts, and every
+component that reads `key` shares it. Values must be JSON. Outside render,
+use `sidedoor.storage.get(key)`, `.set(key, value)` and `.delete(key)`.
+
 Give list items a `key` or `id` so they keep their state when the list is
 reordered.
 
@@ -183,6 +206,9 @@ reordered.
 - `sidedoor.openUrl(url)`: opens a URL.
 - `sidedoor.open(path)`: opens a file.
 - `sidedoor.copy(text)`: copies text.
+- `sidedoor.notify({ title, body? })`: shows a banner in Notification
+  Center, under the plugin's name. macOS asks once whether Sidedoor may
+  send notifications.
 - `sidedoor.dataDir`: a folder the plugin can keep files in.
 
 Everything else, such as `fetch`, files and timers, is plain Bun.
@@ -201,5 +227,5 @@ what changed: `{"type":"patch","surface":"card","patches":[{"op":"props","path":
 where `op` is `replace` or `props`. A function prop travels as `{"$h": key}`.
 
 The app sends `event` (a handler key and a value), `card` (whether the card
-is open), `settings`, and `resync` if a patch doesn't fit its copy of the
-tree.
+is open), `click`, `action` (a key from `actions`), `settings`, and
+`resync` if a patch doesn't fit its copy of the tree.

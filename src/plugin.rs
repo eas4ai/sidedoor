@@ -30,6 +30,10 @@ pub struct Manifest {
     /// A fixed card height, or `None` to fit the content.
     pub height: Option<f64>,
     pub settings: Vec<SettingSpec>,
+    /// Whether clicking the dock tile runs the plugin's `onClick`.
+    pub clickable: bool,
+    /// Commands for the item's context menu.
+    pub actions: Vec<PluginAction>,
     pub dir: PathBuf,
     /// The entry file, relative to `dir`.
     pub main: PathBuf,
@@ -82,6 +86,13 @@ impl SettingSpec {
     }
 }
 
+/// A command a plugin adds to its dock item's context menu.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct PluginAction {
+    pub key: String,
+    pub title: String,
+}
+
 /// What a plugin tells the host about itself when it starts, from its
 /// `definePlugin` call.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -95,6 +106,10 @@ pub struct Described {
     pub height: Option<f64>,
     #[serde(default)]
     pub settings: Vec<SettingSpec>,
+    #[serde(default)]
+    pub clickable: bool,
+    #[serde(default)]
+    pub actions: Vec<PluginAction>,
 }
 
 fn default_icon() -> String {
@@ -131,6 +146,8 @@ impl Manifest {
             width: default_width(),
             height: None,
             settings: Vec::new(),
+            clickable: false,
+            actions: Vec::new(),
             dir: dir.to_path_buf(),
             main,
         })
@@ -145,6 +162,8 @@ impl Manifest {
             .height
             .map(|height| height.clamp(40.0, MAX_HEIGHT));
         self.settings = described.settings;
+        self.clickable = described.clickable;
+        self.actions = described.actions;
     }
 
     /// The asset path of the plugin's icon.
@@ -309,6 +328,11 @@ pub enum PluginMessage {
     Copy {
         text: String,
     },
+    Notify {
+        title: String,
+        #[serde(default)]
+        body: String,
+    },
     /// A `console.log` line.
     Log {
         line: String,
@@ -331,6 +355,12 @@ pub enum HostMessage {
     /// Whether the plugin's card is showing.
     Card {
         open: bool,
+    },
+    /// The dock tile was clicked, or the item's shortcut pressed.
+    Click,
+    /// A command from the item's context menu.
+    Action {
+        key: String,
     },
     Settings {
         values: Map<String, Value>,
@@ -771,6 +801,17 @@ mod tests {
             serde_json::to_string(&HostMessage::Card { open: true }).unwrap(),
             r#"{"type":"card","open":true}"#
         );
+        assert_eq!(
+            serde_json::to_string(&HostMessage::Click).unwrap(),
+            r#"{"type":"click"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&HostMessage::Action {
+                key: "reset".into()
+            })
+            .unwrap(),
+            r#"{"type":"action","key":"reset"}"#
+        );
     }
 
     #[test]
@@ -844,7 +885,8 @@ mod tests {
     #[test]
     fn the_running_plugin_describes_itself() {
         let json = r#"{"type":"manifest","plugin":"pomodoro","name":"Pomodoro","icon":"timer",
-            "width":9000,"height":null,
+            "width":9000,"height":null,"clickable":true,
+            "actions":[{"key":"skip","title":"Skip Break"}],
             "settings":[{"key":"sound","title":"Sound","type":"toggle"},
                         {"key":"mode","title":"Mode","type":"choice","options":["focus","break"]}]}"#;
         let PluginMessage::Manifest(described) = serde_json::from_str(json).unwrap() else {
@@ -857,6 +899,8 @@ mod tests {
             width: 280.0,
             height: None,
             settings: Vec::new(),
+            clickable: false,
+            actions: Vec::new(),
             dir: PathBuf::from("/plugins/pomodoro"),
             main: PathBuf::from("index.tsx"),
         };
@@ -864,6 +908,8 @@ mod tests {
         assert_eq!(manifest.name, "Pomodoro");
         assert_eq!(manifest.width, 480.0);
         assert_eq!(manifest.height, None);
+        assert!(manifest.clickable);
+        assert_eq!(manifest.actions[0].title, "Skip Break");
 
         let saved = Map::from_iter([("mode".to_string(), Value::from("break"))]);
         let values = manifest.settings_with(Some(&saved));

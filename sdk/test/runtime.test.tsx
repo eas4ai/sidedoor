@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Button, Card, Meter, describe, useEffect, useState } from "@sidedoor/sdk";
 import { diff, dispatch, renderSurfaces, reset, runEffects, setInvalidateHandler } from "../src/runtime";
+import { createStorage } from "../src/storage";
 
 afterEach(() => {
   reset();
@@ -137,6 +138,39 @@ test("definePlugin carries the whole manifest and its defaults", () => {
       { key: "sound", title: "Sound", type: "toggle", default: true },
       { key: "note", title: "Note", type: "text" },
     ],
+    clickable: false,
+    actions: [],
   });
   expect(defaults).toEqual({ length: "15", sound: true, note: "" });
+});
+
+test("stored values survive a restart", async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/sidedoor-storage-`);
+  const file = `${dir}/storage.json`;
+  let changes = 0;
+  const first = createStorage(file, () => changes++);
+  first.set("count", 3);
+  first.set("name", "focus");
+  first.delete("name");
+  await tick();
+  expect(changes).toBe(3);
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ count: 3 });
+
+  const second = createStorage(file);
+  expect(second.get<number>("count")).toBe(3);
+  expect(second.has("name")).toBe(false);
+  rmSync(dir, { recursive: true });
+});
+
+test("a definition's click handler and actions reach the manifest", () => {
+  const { manifest } = describe({
+    name: "Timer",
+    card: () => null,
+    onClick() {},
+    actions: { skip: { title: "Skip Break", run() {} } },
+  });
+  expect(manifest.clickable).toBe(true);
+  expect(manifest.actions).toEqual([{ key: "skip", title: "Skip Break" }]);
 });

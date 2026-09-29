@@ -1394,3 +1394,55 @@ fn a_starting_plugin_describes_itself_to_the_dock(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn plugins_hear_clicks_shortcuts_and_menu_commands(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, cx| {
+            dock.activate(0, cx);
+            dock.trigger_shortcut("plugin:counter", cx);
+            dock.run_plugin_action("counter", "reset");
+        })
+    });
+    assert_eq!(
+        sent(&h, "counter"),
+        [
+            HostMessage::Click,
+            HostMessage::Click,
+            HostMessage::Action {
+                key: "reset".into()
+            }
+        ]
+    );
+    // A clicked shortcut doesn't peek at the card.
+    cx.update(|cx| assert!(h.dock.read(cx).card().is_none()));
+}
+
+#[gpui_kit::test]
+fn plugin_notifications_carry_the_plugins_name(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        PluginMessage::Notify {
+            title: "Time's up".into(),
+            body: "Take a break.".into(),
+        },
+    );
+    assert_eq!(
+        *h.platform.notified.borrow(),
+        [["Counter", "Time's up", "Take a break."].map(String::from)]
+    );
+}

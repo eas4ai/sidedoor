@@ -1,5 +1,6 @@
 // A focus timer: a native card with custom-styled pieces, and a dock tile
-// that counts down.
+// that counts down. Clicking the tile starts and pauses it, the timer
+// survives reloads and restarts, and a banner says when time is up.
 
 import {
   Button,
@@ -11,19 +12,44 @@ import {
   sidedoor,
   useEffect,
   useInterval,
+  useRef,
   useSetting,
+  useStorage,
 } from "@sidedoor/sdk";
 
 const LENGTHS = [15, 25, 50];
 
-const initial = Number(sidedoor.settings().length ?? 25);
-const timer = createStore({ minutes: initial, left: initial * 60, running: false });
+/** Saved as it changes. While running, `endsAt` is when time is up. */
+interface Timer {
+  minutes: number;
+  left: number;
+  endsAt: number | null;
+}
+
+const fresh = (minutes: number): Timer => ({ minutes, left: minutes * 60, endsAt: null });
+const initial = fresh(Number(sidedoor.settings().length ?? 25));
+const saved = () => sidedoor.storage.get<Timer>("timer") ?? initial;
+const save = (timer: Timer) => sidedoor.storage.set("timer", timer);
+
+/** Seconds left, counted from the clock so a restart doesn't lose time. */
+const secondsLeft = (timer: Timer) =>
+  timer.endsAt === null ? timer.left : Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 1000));
 
 const clock = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
-function restart(minutes: number) {
-  timer.set({ minutes, left: minutes * 60, running: false });
+/** Redraws once a second while the timer runs. */
+const now = createStore(Date.now());
+
+const restart = (minutes: number) => save(fresh(minutes));
+
+function toggle() {
+  const timer = saved();
+  save(
+    timer.endsAt === null
+      ? { ...timer, endsAt: Date.now() + timer.left * 1000 }
+      : { ...timer, left: secondsLeft(timer), endsAt: null },
+  );
 }
 
 export default definePlugin({
@@ -40,8 +66,16 @@ export default definePlugin({
     },
   },
 
+  onClick: toggle,
+  actions: {
+    reset: { title: "Reset Timer", run: () => restart(saved().minutes) },
+  },
+
   tile() {
-    const { left, running } = timer.use();
+    const [timer] = useStorage("timer", initial);
+    now.use();
+    const left = secondsLeft(timer);
+    const running = timer.endsAt !== null;
     return (
       <div flex flex_col items_center gap={2}>
         <Icon name={running ? "timer" : "timer-off"} icon_size={17} color={running ? "orange" : "label"} />
@@ -53,18 +87,32 @@ export default definePlugin({
   },
 
   card() {
-    const { minutes, left, running } = timer.use();
+    const [timer] = useStorage("timer", initial);
+    now.use();
+    const { minutes } = timer;
+    const left = secondsLeft(timer);
+    const running = timer.endsAt !== null;
     // A new default from Settings › Plugins applies while the timer is idle.
     const length = Number(useSetting<string>("length") ?? 25);
+    const lastLength = useRef(length);
     useEffect(() => {
-      if (!timer.get().running) restart(length);
+      if (lastLength.current === length) return;
+      lastLength.current = length;
+      if (saved().endsAt === null) restart(length);
     }, [length]);
     // The card always renders, so the clock ticks here.
     useInterval(
-      () =>
-        timer.set((t) =>
-          t.left <= 1 ? { ...t, left: t.minutes * 60, running: false } : { ...t, left: t.left - 1 },
-        ),
+      () => {
+        now.set(Date.now());
+        const current = saved();
+        if (current.endsAt !== null && secondsLeft(current) === 0) {
+          restart(current.minutes);
+          sidedoor.notify({
+            title: "Time's up",
+            body: `${current.minutes} minutes of focus done. Take a break.`,
+          });
+        }
+      },
       running ? 1000 : null,
     );
     const progress = 1 - left / (minutes * 60);
@@ -92,7 +140,7 @@ export default definePlugin({
             variant="primary"
             icon={running ? "pause" : "play"}
             label={running ? "Pause" : "Start"}
-            on_click={() => timer.set((t) => ({ ...t, running: !t.running }))}
+            on_click={toggle}
           />
           <Button icon="rotate-ccw" label="Reset" on_click={() => restart(minutes)} />
         </div>

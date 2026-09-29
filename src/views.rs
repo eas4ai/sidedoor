@@ -56,6 +56,14 @@ pub struct RevealItem {
     pub id: SharedString,
 }
 
+/// A command a plugin added to its item's context menu.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = sidedoor, no_json)]
+pub struct RunPluginAction {
+    pub plugin: SharedString,
+    pub key: SharedString,
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = sidedoor, no_json)]
 pub struct RemoveItem {
@@ -455,6 +463,20 @@ fn slot(
     };
     let is_app = matches!(item.kind, ItemKind::App(_));
     let id = item.id.clone();
+    let plugin_actions: Vec<(SharedString, RunPluginAction)> = match &item.kind {
+        ItemKind::Plugin(manifest) => manifest
+            .actions
+            .iter()
+            .map(|action| {
+                let run = RunPluginAction {
+                    plugin: manifest.id.clone().into(),
+                    key: action.key.clone().into(),
+                };
+                (action.title.clone().into(), run)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
 
     let hover = dock_entity.clone();
     let click = dock_entity.clone();
@@ -507,6 +529,12 @@ fn slot(
                         .menu("Open", Box::new(OpenItem { id: id.clone() }))
                         .menu("Show in Finder", Box::new(RevealItem { id: id.clone() }))
                         .separator();
+                }
+                if !plugin_actions.is_empty() {
+                    for (title, run) in &plugin_actions {
+                        menu = menu.menu(title.clone(), Box::new(run.clone()));
+                    }
+                    menu = menu.separator();
                 }
                 menu = match &shortcut {
                     Some(keys) => menu

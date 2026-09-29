@@ -9,6 +9,7 @@ mod geometry;
 mod hotkeys;
 mod macos;
 mod motion;
+mod notifications;
 mod platform;
 mod plugin;
 mod plugin_ui;
@@ -44,7 +45,7 @@ use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
 use std::{cell::RefCell, rc::Rc};
 use views::{
     AssignShortcut, CardChrome, CardView, DockView, OpenConfigFile, OpenItem, OpenSettings,
-    RemoveItem, RemoveShortcut, RevealItem,
+    RemoveItem, RemoveShortcut, RevealItem, RunPluginAction,
 };
 
 fn panel_options(width: f64, height: f64) -> WindowOptions {
@@ -756,6 +757,12 @@ fn run(cx: &mut App) -> Result<(), String> {
     let handler = dock.clone();
     cx.on_action(move |action: &OpenItem, cx| {
         handler.update(cx, |dock, cx| dock.open_item(&action.id, cx));
+    });
+    let handler = dock.clone();
+    cx.on_action(move |action: &RunPluginAction, cx| {
+        handler.update(cx, |dock, _| {
+            dock.run_plugin_action(&action.plugin, &action.key);
+        });
     });
     let handler = dock.clone();
     cx.on_action(move |action: &RevealItem, cx| {

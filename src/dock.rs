@@ -373,6 +373,13 @@ impl Dock {
                 self.show_clipboard_history(cx);
                 return;
             }
+            Some(ItemKind::Plugin(manifest)) => {
+                if manifest.clickable {
+                    let id = manifest.id.clone();
+                    self.send_plugin(&id, &HostMessage::Click);
+                }
+                return;
+            }
             _ => return,
         };
         if let Err(err) = self.platform.open(&app.path) {
@@ -381,6 +388,22 @@ impl Dock {
         // Show the running dot without waiting for the next poll.
         if self.running.insert(app.bundle_id.clone()) {
             cx.notify();
+        }
+    }
+
+    /// Runs a command from a plugin item's context menu. `id` is the
+    /// plugin's id, not the item's.
+    pub fn run_plugin_action(&mut self, id: &str, key: &str) {
+        self.send_plugin(id, &HostMessage::Action { key: key.into() });
+    }
+
+    fn send_plugin(&mut self, id: &str, message: &HostMessage) {
+        if let Some(link) = self
+            .plugins
+            .get_mut(id)
+            .and_then(|state| state.link.as_mut())
+        {
+            link.send(message);
         }
     }
 
@@ -598,6 +621,20 @@ impl Dock {
             }
             PluginMessage::Copy { text } => {
                 self.platform.write_pasteboard(&ClipKind::Text { text });
+                return;
+            }
+            PluginMessage::Notify { title, body } => {
+                let source = self
+                    .items
+                    .iter()
+                    .find_map(|item| match &item.kind {
+                        ItemKind::Plugin(manifest) if manifest.id == id => {
+                            Some(manifest.name.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| id.to_string());
+                self.platform.notify(&source, &title, &body);
                 return;
             }
         }
@@ -854,8 +891,10 @@ impl Dock {
         let Some(index) = self.index_of(id) else {
             return;
         };
-        match self.items[index].kind {
+        match &self.items[index].kind {
             ItemKind::App(_) | ItemKind::Clipboard => self.activate(index, cx),
+            // A plugin that handles clicks gets the shortcut as a click.
+            ItemKind::Plugin(manifest) if manifest.clickable => self.activate(index, cx),
             ItemKind::Weather | ItemKind::Stats | ItemKind::Plugin(_) => self.peek(index, cx),
         }
     }
