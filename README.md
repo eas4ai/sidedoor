@@ -28,9 +28,12 @@ Run `cargo run`, or build and install the app with
 
 ## Linux
 
-Sidedoor runs on X11 desktops, and on Wayland sessions through XWayland
-(it switches to X11 itself, since Wayland doesn't let an app follow the
-pointer or place a dock). It looks the same as on macOS: the views are
+Sidedoor runs on X11 desktops; it has been checked with the GNOME (Mutter),
+KDE (KWin) and Xfce window managers. On a Wayland session it starts through
+XWayland, since Wayland doesn't let an app follow the pointer or place a
+dock, but XWayland only sees the pointer over X11 windows, so revealing the
+dock at the screen edge isn't reliable there yet. Choose the X11 session
+(for example "GNOME on Xorg") at login. It looks the same as on macOS: the views are
 shared, and text uses [Inter](https://rsms.me/inter/) when it is installed.
 Windows keep the desktop's own title bar, as they do on Windows; on macOS
 the traffic lights sit in the window's toolbar.

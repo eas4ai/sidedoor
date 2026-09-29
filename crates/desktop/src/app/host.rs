@@ -54,6 +54,9 @@ impl ::platform::Platform for NativeHost {
     fn app_at(&self, path: &Path) -> Option<AppInfo> {
         self.native.app_at(path)
     }
+    fn installed_apps(&self) -> Vec<AppInfo> {
+        self.native.installed_apps()
+    }
     fn open(&self, path: &Path) -> io::Result<()> {
         self.native.open(path)
     }
@@ -386,6 +389,9 @@ pub mod fake {
                 .iter()
                 .find(|app| app.path == path)
                 .cloned()
+        }
+        fn installed_apps(&self) -> Vec<AppInfo> {
+            self.apps.borrow().clone()
         }
         fn open(&self, path: &Path) -> io::Result<()> {
             self.opened.borrow_mut().push(path.to_path_buf());

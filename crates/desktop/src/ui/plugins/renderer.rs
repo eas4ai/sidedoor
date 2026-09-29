@@ -517,6 +517,12 @@ impl Surface {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
+                // Cards are panels that never take the keyboard on their own
+                // on X11; clicking a field asks for it, as on macOS. Capture
+                // runs before the field handles the press.
+                .when(cfg!(target_os = "linux"), |this| {
+                    this.capture_any_mouse_down(|_, window, _| take_keyboard(window))
+                })
                 .children(
                     string(props, "icon")
                         .map(|name| views::icon(icon_path(name).into(), 14.0, palette.secondary)),
@@ -842,6 +848,13 @@ const ANIMATABLE: &[&str] = &[
     "rounded",
     "text_size",
 ];
+
+fn take_keyboard(window: &mut Window) {
+    #[cfg(target_os = "linux")]
+    ::platform::native::take_keyboard(window);
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
+}
 
 /// A plugin's text field: its text and cursor live here, across renders,
 /// and every edit goes to the plugin's handlers.

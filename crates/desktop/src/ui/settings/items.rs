@@ -197,8 +197,13 @@ pub(super) fn items_page(
             palette,
             room,
             false,
-            move |_, cx| {
-                adder.update(cx, |this, cx| this.add_apps(cx));
+            move |window, cx| {
+                // Linux has no file panel that lists apps as Finder does.
+                if cfg!(target_os = "linux") {
+                    window.dispatch_action(Box::new(views::AddApps), cx);
+                } else {
+                    adder.update(cx, |this, cx| this.add_apps(cx));
+                }
             },
         ),
         palette,

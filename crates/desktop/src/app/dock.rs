@@ -28,6 +28,8 @@ pub const STATS_INTERVAL: Duration = Duration::from_secs(2);
 const PASTEBOARD_INTERVAL: Duration = Duration::from_millis(500);
 const WEATHER_INTERVAL: Duration = Duration::from_secs(20 * 60);
 const WEATHER_RETRY: Duration = Duration::from_secs(60);
+/// How often the weather task checks whether anything shows weather yet.
+const WEATHER_WAIT: Duration = Duration::from_secs(1);
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 /// How long "Clear History" waits for its confirming second click.
 const CLEAR_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
@@ -199,6 +201,8 @@ pub struct Dock {
     clear_armed: Option<Task<()>>,
     screen: Screen,
     reveal: Reveal,
+    /// Where the open card's window is, in screen points.
+    card_frame: Option<Rect>,
     /// A context menu is open; the dock stays as it is until it closes,
     /// as it does while a macOS menu tracks the pointer.
     menu_open: bool,
@@ -302,6 +306,7 @@ impl Dock {
             clear_armed: None,
             screen,
             menu_open: false,
+            card_frame: None,
             reveal: Reveal::default(),
             live: services.live,
             weather_task,
@@ -361,6 +366,15 @@ impl Dock {
         self.running.contains(&app.bundle_id)
     }
 
+    /// Installed apps, where the app picker lists them itself.
+    pub fn installed_apps(&self) -> Vec<AppInfo> {
+        self.platform.installed_apps()
+    }
+
+    pub fn has_app(&self, bundle_id: &str) -> bool {
+        self.index_of(&format!("app:{bundle_id}")).is_some()
+    }
+
     pub fn index_of(&self, id: &str) -> Option<usize> {
         self.items.iter().position(|item| item.id == id)
     }
@@ -383,6 +397,16 @@ impl Dock {
     }
 
     pub fn set_card_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        // A card typed into can report the pointer leaving while it hasn't
+        // (key events in an X11 pop-up); believe the real pointer.
+        if !hovered
+            && self.live
+            && self
+                .card_frame
+                .is_some_and(|frame| frame.contains(self.platform.pointer()))
+        {
+            return;
+        }
         self.pointer_on_card = hovered;
         if hovered {
             self.close_card = None;
@@ -1418,7 +1442,14 @@ impl Dock {
 
     // MARK: Polling
 
-    /// Holds the dock in place while a context menu is open.
+    /// Records where the card's window is, as the native windows place it.
+    pub fn set_card_frame(&mut self, frame: Option<Rect>) {
+        self.card_frame = frame;
+    }
+
+    /// Holds the dock in place while a context menu is open. Only the drawn
+    /// Linux menu needs it; system menus pause the dock's timers themselves.
+    #[cfg(target_os = "linux")]
     pub fn set_menu_open(&mut self, open: bool) {
         self.menu_open = open;
     }
@@ -1533,7 +1564,9 @@ impl Dock {
                     }
                     delay
                 } else {
-                    WEATHER_RETRY
+                    // Nothing shows weather yet; at launch the plugin is still
+                    // starting, so look again soon rather than in a minute.
+                    WEATHER_WAIT
                 };
                 cx.background_executor().timer(delay).await;
             }

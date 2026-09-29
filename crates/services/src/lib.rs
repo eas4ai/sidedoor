@@ -1,4 +1,5 @@
 //! Data acquisition and persistence, independent of desktop views.
+pub mod http;
 pub mod images;
 pub mod stats;
 pub mod storage;

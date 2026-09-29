@@ -72,7 +72,9 @@ pub fn parse(json: &str) -> Result<Weather, String> {
 
 /// Blocking fetch; call it from a background task.
 pub fn fetch(location: &WeatherLocation) -> Result<Weather, String> {
-    let body = ureq::get(&url(location))
+    let url = url(location);
+    let body = crate::http::agent(&url, ureq::AgentBuilder::new())
+        .get(&url)
         .timeout(std::time::Duration::from_secs(15))
         .call()
         .map_err(|err| format!("Couldn't reach Open-Meteo ({err})"))?
@@ -108,7 +110,9 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
 
 /// Blocking place search; call it from a background task.
 pub fn search(query: &str) -> Result<Vec<Place>, String> {
-    let body = ureq::get(&search_url(query))
+    let url = search_url(query);
+    let body = crate::http::agent(&url, ureq::AgentBuilder::new())
+        .get(&url)
         .timeout(std::time::Duration::from_secs(10))
         .call()
         .map_err(|err| format!("Couldn't reach Open-Meteo ({err})"))?
