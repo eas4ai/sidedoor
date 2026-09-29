@@ -7,6 +7,7 @@
 use crate::{
     dock::Dock,
     plugin::{Node, icon_path},
+    remote_image,
     style::{Palette, text},
     views,
 };
@@ -18,6 +19,7 @@ use gpui_kit::{
     base::{Spring, Transition, spring, transition},
     component::{
         Disableable as _, Sizable as _,
+        chart::{AreaChart, BarChart, LineChart},
         input::{Input, InputEvent, InputState},
         switch::Switch,
     },
@@ -90,16 +92,21 @@ impl Surface {
                     Some("fill") => ObjectFit::Fill,
                     _ => ObjectFit::Contain,
                 };
-                style(
-                    img(std::path::PathBuf::from(
-                        string(props, "src").unwrap_or_default(),
-                    ))
-                    .object_fit(fit),
-                    props,
-                    palette,
-                )
-                .into_any_element()
+                let src = string(props, "src").unwrap_or_default();
+                let file = if remote_image::is_remote(src) {
+                    remote_image::resolve(src, &self.dock, cx)
+                } else {
+                    Some(std::path::PathBuf::from(src))
+                };
+                match file {
+                    Some(file) => {
+                        style(img(file).object_fit(fit), props, palette).into_any_element()
+                    }
+                    // A placeholder the image's size while it downloads.
+                    None => style(div().bg(palette.fill), props, palette).into_any_element(),
+                }
             }
+            "Chart" => self.chart(props, path),
             "Card" => {
                 let heading = string(props, "title").map(|title| {
                     div()
@@ -727,6 +734,73 @@ impl PluginInput {
             _subscription: subscription,
         }
     }
+}
+
+impl Surface {
+    /// A line, area or bar chart from GPUI Kit, over `{ label, value }` points.
+    fn chart(&self, props: &Props, path: &str) -> AnyElement {
+        let palette = self.palette;
+        let points: Vec<(SharedString, f64)> = props
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|data| {
+                data.iter()
+                    .filter_map(|point| {
+                        let label = point.get("label").and_then(Value::as_str).unwrap_or("");
+                        let value = point.get("value").and_then(Value::as_f64)?;
+                        Some((SharedString::from(label.to_string()), value))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let stroke = color(props.get("color"), palette).unwrap_or(palette.blue);
+        let id = SharedString::from(format!("plugin:{}:{path}:chart", self.plugin));
+        let x_axis = flag_or(props, "x_axis", true);
+        let y_axis = flag_or(props, "y_axis", false);
+        let grid = flag_or(props, "grid", false);
+        let name = string(props, "name").map(|name| SharedString::from(name.to_string()));
+
+        let chart = match string(props, "kind") {
+            Some("bar") => BarChart::new(points)
+                .id(id)
+                .band(|(label, _): &(SharedString, f64)| label.clone())
+                .value(|(_, value): &(SharedString, f64)| *value)
+                .fill(move |_, _, _, _| stroke)
+                .label_axis(x_axis)
+                .value_axis(y_axis)
+                .grid(grid)
+                .when_some(name, |chart, name| chart.name(name))
+                .into_any_element(),
+            Some("area") => AreaChart::new(points)
+                .id(id)
+                .x(|(label, _): &(SharedString, f64)| label.clone())
+                .y(|(_, value): &(SharedString, f64)| *value)
+                .stroke(stroke)
+                .fill(stroke.opacity(0.18))
+                .natural()
+                .x_axis(x_axis)
+                .y_axis(y_axis)
+                .grid(grid)
+                .when_some(name, |chart, name| chart.name(name))
+                .into_any_element(),
+            _ => LineChart::new(points)
+                .id(id)
+                .x(|(label, _): &(SharedString, f64)| label.clone())
+                .y(|(_, value): &(SharedString, f64)| *value)
+                .stroke(stroke)
+                .x_axis(x_axis)
+                .y_axis(y_axis)
+                .grid(grid)
+                .when_some(name, |chart, name| chart.name(name))
+                .into_any_element(),
+        };
+        style(div().w_full().h(px(96.0)).child(chart), props, palette).into_any_element()
+    }
+}
+
+/// A boolean prop that is on unless the plugin turns it off, or the reverse.
+fn flag_or(props: &Props, name: &str, default: bool) -> bool {
+    props.get(name).and_then(Value::as_bool).unwrap_or(default)
 }
 
 fn send(dock: &Entity<Dock>, plugin: &str, handler: &str, value: Value, cx: &mut App) {

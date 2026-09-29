@@ -243,6 +243,28 @@ export interface SparklineProps extends StyleProps {
   color?: Color;
 }
 
+/** One point of a `Chart`. */
+export interface ChartPoint {
+  label: string;
+  value: number;
+}
+
+export interface ChartProps extends StyleProps {
+  /** `line` by default. */
+  kind?: "line" | "area" | "bar";
+  data: ChartPoint[];
+  /** The line, area or bars; `blue` by default. */
+  color?: Color;
+  /** The series name in the hover tooltip. */
+  name?: string;
+  /** Labels along the bottom; on by default. */
+  x_axis?: boolean;
+  /** Values along the side; off by default. */
+  y_axis?: boolean;
+  /** Horizontal grid lines; off by default. */
+  grid?: boolean;
+}
+
 export interface InputProps extends StyleProps {
   /** Required: it keeps the field's text and cursor between renders. */
   id: string | number;
@@ -268,7 +290,7 @@ export interface SvgProps extends StyleProps {
 }
 
 export interface ImgProps extends StyleProps {
-  /** An absolute file path. */
+  /** An absolute file path, or an `https://` URL the app downloads and caches. */
   src: string;
   object_fit?: "contain" | "cover" | "fill";
 }

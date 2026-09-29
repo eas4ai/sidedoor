@@ -1446,3 +1446,43 @@ fn plugin_notifications_carry_the_plugins_name(cx: &mut TestAppContext) {
         [["Counter", "Time's up", "Take a break."].map(String::from)]
     );
 }
+
+#[gpui_kit::test]
+fn plugins_draw_line_area_and_bar_charts(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let data = serde_json::json!([
+        { "label": "Mon", "value": 3 }, { "label": "Tue", "value": 5 }, { "label": "Wed", "value": 2 }
+    ]);
+    let chart = |id: &str, kind: &str, height: u32| {
+        serde_json::json!({ "t": "div", "p": { "id": id }, "c": [
+            { "t": "Chart", "p": { "kind": kind, "data": data, "h": height, "color": "orange" }, "c": [] }
+        ]})
+    };
+    plugin_says(
+        &h,
+        cx,
+        "counter",
+        render(
+            "card",
+            serde_json::json!([{ "t": "div", "p": { "flex": true, "flex_col": true }, "c": [
+                chart("line", "line", 60), chart("area", "area", 70), chart("bar", "bar", 80)
+            ]}]),
+        ),
+    );
+    open_plugin_card(&h, cx, "plugin:counter");
+    cx.update_window(h.card_window, |_, window, _| {
+        for (id, height) in [("line", 60.0), ("area", 70.0), ("bar", 80.0)] {
+            let size = window
+                .find(gpui_kit::SharedString::from(format!("plugin:counter:{id}")))
+                .bounds()
+                .size;
+            assert_eq!(size.height, px(height), "{id}");
+        }
+    })
+    .unwrap();
+}

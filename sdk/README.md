@@ -118,7 +118,7 @@ GPUI's elements, in lowercase:
 | --- | --- |
 | `div` | style props, `id`, `on_click`, `on_hover(hovered)`, `hover={{…}}`, `active={{…}}` |
 | `svg` | `path` (a Lucide name), style props |
-| `img` | `src` (an absolute file path), `object_fit` (`contain`, `cover` or `fill`), style props |
+| `img` | `src` (an absolute file path or an `https://` URL), `object_fit` (`contain`, `cover` or `fill`), style props |
 
 ## Native components
 
@@ -137,6 +137,7 @@ widgets. They also take style props, which are applied on top.
 | `Meter` | `label`, `fraction` (0–1), `value`, `icon`, `color` |
 | `ListRow` | `title`, `subtitle`, `icon`, `accessory`, `on_click` |
 | `Sparkline` | `values` (0–1 each), `color` |
+| `Chart` | `kind` (`line`, `area` or `bar`), `data` (`[{ label, value }]`), `color`, `name`, `x_axis`, `y_axis`, `grid` |
 | `Footer`, `Keycap`, `Divider`, `Spacer` | style props |
 
 ## Style props
@@ -150,6 +151,12 @@ becomes a boolean prop, and numbers are points.
 - **Position:** `relative` `absolute` `top` `right` `bottom` `left` `inset_0` `overflow_hidden` `overflow_y_scroll` `overflow_x_scroll`
 - **Paint:** `bg` `opacity` `rounded` `rounded_full` `border` `border_1` `border_t_1` `border_b_1` `border_color` `shadow_sm` `shadow_md` `shadow_lg`
 - **Text:** `text_color` `text_size` `font_weight` (`"medium"`, `"semibold"`, `"bold"` or a number) `font_family` `italic` `line_height` `text_center` `text_right` `truncate` `whitespace_nowrap` `line_clamp`
+
+An `img` with a URL shows a placeholder the size of its style until the
+app has downloaded it. Downloads are cached for an hour and capped at 10 MB.
+A `Chart` is 96 points tall unless you give it `h`, shows a tooltip on
+hover, and takes its axes and grid off by default except the labels along
+the bottom.
 
 `Input` takes keyboard focus in the card without switching apps. Typing
 reaches the plugin through `on_change`, and Return through `on_submit`. Set

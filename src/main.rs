@@ -13,6 +13,7 @@ mod notifications;
 mod platform;
 mod plugin;
 mod plugin_ui;
+mod remote_image;
 mod settings_plugins;
 mod settings_window;
 mod shortcut;

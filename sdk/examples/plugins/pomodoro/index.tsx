@@ -5,6 +5,7 @@
 import {
   Button,
   Card,
+  Chart,
   Icon,
   Segmented,
   createStore,
@@ -41,6 +42,28 @@ const clock = (seconds: number) =>
 const now = createStore(Date.now());
 
 const restart = (minutes: number) => save(fresh(minutes));
+
+/** Minutes of finished sessions, by day (`YYYY-MM-DD`). */
+type History = Record<string, number>;
+
+const dayKey = (date: Date) => date.toISOString().slice(0, 10);
+
+function logSession(minutes: number) {
+  const history = sidedoor.storage.get<History>("history") ?? {};
+  const today = dayKey(new Date());
+  sidedoor.storage.set("history", { ...history, [today]: (history[today] ?? 0) + minutes });
+}
+
+/** The last seven days, oldest first, for the chart. */
+function week(history: History) {
+  return Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(Date.now() - (6 - index) * 86_400_000);
+    return {
+      label: day.toLocaleDateString("en", { weekday: "short" }),
+      value: history[dayKey(day)] ?? 0,
+    };
+  });
+}
 
 function toggle() {
   const timer = saved();
@@ -87,6 +110,7 @@ export default definePlugin({
 
   card({ settings }) {
     const [timer] = useStorage("timer", initial);
+    const [history] = useStorage<History>("history", {});
     now.use();
     const { minutes } = timer;
     const left = secondsLeft(timer);
@@ -106,6 +130,7 @@ export default definePlugin({
         const current = saved();
         if (current.endsAt !== null && secondsLeft(current) === 0) {
           restart(current.minutes);
+          logSession(current.minutes);
           sidedoor.notify({
             title: "Time's up",
             body: `${current.minutes} minutes of focus done. Take a break.`,
@@ -143,6 +168,7 @@ export default definePlugin({
           />
           <Button icon="rotate-ccw" label="Reset" on_click={() => restart(minutes)} />
         </div>
+        <Chart kind="bar" h={64} mt={4} color="orange" name="Minutes" data={week(history)} />
       </Card>
     );
   },

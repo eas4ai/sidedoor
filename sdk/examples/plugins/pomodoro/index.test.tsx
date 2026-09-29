@@ -22,6 +22,9 @@ test("a session that ends sends a banner and resets", async () => {
     { title: "Time's up", body: "15 minutes of focus done. Take a break." },
   ]);
   expect(plugin.text()).toContain("15:00");
+  const [chart] = plugin.findAll("Chart");
+  const week = chart?.props.data as Array<{ value: number }>;
+  expect(week.at(-1)?.value).toBe(15);
   plugin.unmount();
   setSystemTime();
 });

@@ -16,6 +16,7 @@ import type {
   SegmentedProps,
   SpacerProps,
   SparklineProps,
+  ChartProps,
   SwitchProps,
   TextProps,
 } from "./types";
@@ -49,6 +50,8 @@ export const Meter = native<MeterProps>("Meter");
 export const ListRow = native<ListRowProps>("ListRow");
 /** Bars of recent values, as in the Stats card. */
 export const Sparkline = native<SparklineProps>("Sparkline");
+/** A line, area or bar chart, 96 points tall unless `h` says otherwise. */
+export const Chart = native<ChartProps>("Chart");
 /** A card footer: a hairline above a row of small text or buttons. */
 export const Footer = native<FooterProps>("Footer");
 /** A key drawn as a keycap. */
