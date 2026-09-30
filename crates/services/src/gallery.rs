@@ -20,6 +20,9 @@ pub struct Entry {
     /// The systems it works on (`macos`, `linux`, `windows`); all when empty.
     #[serde(default)]
     pub platforms: Vec<String>,
+    /// Made and kept up by the Sidedoor project.
+    #[serde(default)]
+    pub official: bool,
 }
 
 #[derive(Deserialize)]

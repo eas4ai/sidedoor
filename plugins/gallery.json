@@ -1,6 +1,27 @@
 {
   "plugins": [
     {
+      "name": "Weather",
+      "description": "The weather where you choose, with the next hours and today's high and low, from Open-Meteo.",
+      "icon": "cloud",
+      "link": "https://github.com/lassejlv/sidedoor/tree/main/plugins/weather",
+      "official": true
+    },
+    {
+      "name": "Clipboard",
+      "description": "A searchable history of the text, links, files and images you copy.",
+      "icon": "clipboard",
+      "link": "https://github.com/lassejlv/sidedoor/tree/main/plugins/clipboard",
+      "official": true
+    },
+    {
+      "name": "Stats",
+      "description": "CPU, memory and storage at a glance, with recent CPU use.",
+      "icon": "cpu",
+      "link": "https://github.com/lassejlv/sidedoor/tree/main/plugins/stats",
+      "official": true
+    },
+    {
       "name": "Spotify",
       "description": "What's playing in the Spotify app, with playback controls, a seek bar and volume.",
       "icon": "music",

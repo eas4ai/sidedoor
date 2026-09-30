@@ -2782,6 +2782,7 @@ fn the_gallery_marks_plugins_already_installed(cx: &mut TestAppContext) {
                 icon: "timer".into(),
                 link: "https://github.com/lassejlv/sidedoor/tree/main/plugins/pomodoro".into(),
                 platforms: Vec::new(),
+                official: false,
             }];
         })
     });
