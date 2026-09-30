@@ -30,8 +30,8 @@ use objc2_app_kit::{
     NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString,
-    NSTimeZone, NSURL, NSValue,
+    NSBundle, NSData, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString, NSTimeZone,
+    NSURL, NSValue,
 };
 use objc2_quartz_core::{
     CABasicAnimation, CAMediaTiming as _, CAMediaTimingFunction, CAShapeLayer, CATransaction,
@@ -128,9 +128,16 @@ impl Platform for MacPlatform {
     }
 
     fn reveal_in_finder(&self, path: &Path) {
-        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-        let urls = NSArray::from_retained_slice(&[url]);
-        NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&urls);
+        // Not `activateFileViewerSelectingURLs`: it waits for Finder in a
+        // nested run loop, which runs GPUI's queued tasks while the click
+        // that called it is still borrowing the app, and that aborts.
+        if let Err(err) = std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+        {
+            eprintln!("sidedoor: couldn't reveal {}: {err}", path.display());
+        }
     }
 
     fn trash(&self, path: &Path) -> std::io::Result<()> {
