@@ -7,7 +7,7 @@ use crate::ui::theme::Palette;
 use domain::motion::{self, SWITCH};
 use gpui_kit::{
     App, BoxShadow, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
-    RenderOnce, StatefulInteractiveElement as _, Styled as _, Window,
+    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
     base::{Transition, transition},
     div, point,
     prelude::FluentBuilder as _,
@@ -33,6 +33,7 @@ pub struct MacSwitch {
     checked: bool,
     disabled: bool,
     palette: Palette,
+    label: Option<SharedString>,
     on_change: Option<ChangeHandler>,
 }
 
@@ -43,6 +44,7 @@ pub fn mac_switch(id: impl Into<ElementId>, palette: Palette) -> MacSwitch {
         checked: false,
         disabled: false,
         palette,
+        label: None,
         on_change: None,
     }
 }
@@ -55,6 +57,12 @@ impl MacSwitch {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// What VoiceOver reads when the row doesn't name the switch.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -127,6 +135,9 @@ impl RenderOnce for MacSwitch {
         gpui_kit::base::Switch::new(self.id)
             .checked(self.checked)
             .disabled(self.disabled)
+            .when_some(self.label, |switch, label| {
+                switch.accessibility_label(label)
+            })
             .when_some(on_change, |switch, on_change| {
                 switch.on_change(move |checked, _, window, cx| on_change(checked, window, cx))
             })

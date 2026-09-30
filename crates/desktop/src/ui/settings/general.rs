@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::updates::{State as AppUpdateState, VERSION};
 use gpui_kit::base::Disableable as _;
-use gpui_kit::component::{Sizable as _, button::Button, switch::Switch};
+use gpui_kit::component::{Sizable as _, button::Button};
 
 pub(super) fn general_page(
     dock_entity: &Entity<Dock>,
@@ -138,14 +138,11 @@ pub(super) fn general_page(
             )
         });
     let handler = dock_entity.clone();
-    let automatic = Switch::new("automatic-app-updates")
-        .small()
+    let automatic = crate::ui::switch::mac_switch("automatic-app-updates", palette)
         .accessibility_label("Check for updates automatically")
         .checked(dock.automatic_update_checks)
         .on_change(move |enabled, _, cx| {
-            handler.update(cx, |dock, cx| {
-                dock.set_automatic_update_checks(*enabled, cx)
-            })
+            handler.update(cx, |dock, cx| dock.set_automatic_update_checks(enabled, cx))
         });
 
     vec![
