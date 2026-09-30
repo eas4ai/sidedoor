@@ -12,9 +12,10 @@ use domain::clipboard::{ClipKind, History};
 use domain::config::{Appearance, Config, ItemConfig};
 use domain::geometry::{self, Edge, Point};
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, InputEvent as _, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, TestAppContext, Window,
-    WindowBounds, WindowOptions, point, px, size, test::TestWindowExt as _,
+    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, InputEvent as _, IntoElement,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Render, SharedString, Styled as _, TestAppContext, Window, WindowBounds, WindowOptions, img,
+    point, px, size, test::TestWindowExt as _,
 };
 use plugin_host::{HostMessage, PluginMessage};
 use services::weather::Place;
@@ -2575,4 +2576,59 @@ fn app_picker_lists_installed_apps_and_adds_them(cx: &mut TestAppContext) {
         assert!(window.try_find("pick:com.example.delta").is_none());
     })
     .unwrap();
+}
+
+/// Draws one image through a [`FrameImages`] cache, the way the dock's
+/// windows do.
+struct OneImage {
+    images: Entity<crate::ui::image_cache::FrameImages>,
+    path: PathBuf,
+}
+
+impl Render for OneImage {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.images
+            .update(cx, |images, cx| images.sweep(window, cx));
+        gpui_kit::image_cache(self.images.clone())
+            .size_full()
+            .child(img(self.path.clone()).size(px(64.0)))
+    }
+}
+
+#[gpui_kit::test]
+fn images_a_window_stops_drawing_are_freed(cx: &mut TestAppContext) {
+    let (window, view) = cx.update(|cx| {
+        gpui_kit::open_window(options(100.0, 100.0), cx, |_, cx| {
+            let images = crate::ui::image_cache::FrameImages::new(cx);
+            cx.new(|_| OneImage {
+                images,
+                path: PathBuf::from("/art/track-1.png"),
+            })
+        })
+        .unwrap()
+    });
+    let cached = |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).images.read(cx).len());
+    let draw = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.refresh();
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    draw(cx);
+    assert_eq!(cached(cx), 1);
+
+    // A new track: the old art is freed on the next frame, not kept.
+    for track in 2..=5 {
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.path = PathBuf::from(format!("/art/track-{track}.png"));
+                cx.notify();
+            })
+        });
+        draw(cx);
+        draw(cx);
+        assert_eq!(cached(cx), 1);
+    }
 }

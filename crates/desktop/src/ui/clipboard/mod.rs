@@ -42,6 +42,8 @@ pub enum ClipboardWindowEvent {
 
 pub struct ClipboardWindow {
     dock: Entity<Dock>,
+    /// Images this window draws, freed once it stops drawing them.
+    images: Entity<crate::ui::image_cache::FrameImages>,
     search: Entity<InputState>,
     query: SharedString,
     filter: Filter,
@@ -98,6 +100,7 @@ impl ClipboardWindow {
         search.update(cx, |search, cx| search.focus(window, cx));
 
         let mut this = Self {
+            images: crate::ui::image_cache::FrameImages::new(cx),
             dock,
             search,
             query: SharedString::default(),
@@ -225,8 +228,8 @@ impl ClipboardWindow {
     }
 }
 
-impl Render for ClipboardWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl ClipboardWindow {
+    fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let dock = self.dock.read(cx);
         let palette = Palette::new(window, dock.accessibility);
@@ -320,6 +323,16 @@ impl Render for ClipboardWindow {
                     .child(detail),
             )
             .child(footer(&view, total, selected.is_some(), palette))
+    }
+}
+
+impl Render for ClipboardWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.images
+            .update(cx, |images, cx| images.sweep(window, cx));
+        gpui_kit::image_cache(self.images.clone())
+            .size_full()
+            .child(self.content(window, cx))
     }
 }
 

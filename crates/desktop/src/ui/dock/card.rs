@@ -85,6 +85,8 @@ pub struct CardChrome {
 
 pub struct CardView {
     dock: Entity<Dock>,
+    /// Images this window draws, freed once it stops drawing them.
+    images: Entity<crate::ui::image_cache::FrameImages>,
     chrome: Entity<CardChrome>,
     _subscriptions: Vec<Subscription>,
 }
@@ -102,6 +104,7 @@ impl CardView {
             cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
         ];
         Self {
+            images: crate::ui::image_cache::FrameImages::new(cx),
             dock,
             chrome,
             _subscriptions: subscriptions,
@@ -109,8 +112,8 @@ impl CardView {
     }
 }
 
-impl Render for CardView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl CardView {
+    fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let animate = !cx.reduce_motion();
         let palette = Palette::new(window, self.dock.read(cx).accessibility);
         // Plugin cards draw with the window, which the dock borrow below
@@ -181,6 +184,16 @@ impl Render for CardView {
                 placement.map(|placement| silhouette(placement, palette.surface, palette.stroke)),
             )
             .child(card)
+    }
+}
+
+impl Render for CardView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.images
+            .update(cx, |images, cx| images.sweep(window, cx));
+        gpui_kit::image_cache(self.images.clone())
+            .size_full()
+            .child(self.content(window, cx))
     }
 }
 

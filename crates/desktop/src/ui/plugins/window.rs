@@ -22,6 +22,8 @@ pub enum PluginWindowEvent {
 
 pub struct PluginWindow {
     dock: Entity<Dock>,
+    /// Images this window draws, freed once it stops drawing them.
+    images: Entity<crate::ui::image_cache::FrameImages>,
     plugin: SharedString,
     key: SharedString,
     title: SharedString,
@@ -54,6 +56,7 @@ impl PluginWindow {
             }),
         ];
         Self {
+            images: crate::ui::image_cache::FrameImages::new(cx),
             dock,
             plugin,
             key,
@@ -63,8 +66,8 @@ impl PluginWindow {
     }
 }
 
-impl Render for PluginWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl PluginWindow {
+    fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dock = self.dock.read(cx);
         let palette = Palette::new(window, dock.accessibility);
         let state = dock.plugin(&self.plugin);
@@ -126,6 +129,16 @@ impl Render for PluginWindow {
                             .children(content),
                     ),
             )
+    }
+}
+
+impl Render for PluginWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.images
+            .update(cx, |images, cx| images.sweep(window, cx));
+        gpui_kit::image_cache(self.images.clone())
+            .size_full()
+            .child(self.content(window, cx))
     }
 }
 

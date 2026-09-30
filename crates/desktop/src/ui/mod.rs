@@ -2,6 +2,7 @@
 pub(crate) mod chrome;
 pub(crate) mod clipboard;
 pub(crate) mod dock;
+pub(crate) mod image_cache;
 pub(crate) mod menu;
 pub(crate) mod plugins;
 pub(crate) mod remote_image;

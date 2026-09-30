@@ -174,6 +174,8 @@ struct Reorder {
 
 pub struct DockView {
     dock: Entity<Dock>,
+    /// Images this window draws, freed once it stops drawing them.
+    images: Entity<crate::ui::image_cache::FrameImages>,
     /// The pointer's position along the dock, while it is over it.
     pointer: Option<f32>,
     pressed: Option<usize>,
@@ -188,6 +190,7 @@ impl DockView {
             cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
         ];
         Self {
+            images: crate::ui::image_cache::FrameImages::new(cx),
             dock,
             pointer: None,
             pressed: None,
@@ -284,8 +287,8 @@ impl DockView {
     }
 }
 
-impl Render for DockView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl DockView {
+    fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A drag that ended anywhere, dropped or not, lets the items settle.
         if !cx.has_active_drag() {
             self.reorder = None;
@@ -440,6 +443,16 @@ impl Render for DockView {
         } else {
             container.flex_row().px(px(DOCK_PADDING as f32))
         }
+    }
+}
+
+impl Render for DockView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.images
+            .update(cx, |images, cx| images.sweep(window, cx));
+        gpui_kit::image_cache(self.images.clone())
+            .size_full()
+            .child(self.content(window, cx))
     }
 }
 
