@@ -43,7 +43,6 @@ pub(super) fn slot(
 
     let hover = dock_entity.clone();
     let click = dock_entity.clone();
-    let drop_slot = dock_entity.clone();
     let drop_paths = dock_entity.clone();
     let press = view.clone();
     let menu_dock = dock_entity.clone();
@@ -126,34 +125,26 @@ pub(super) fn slot(
                 cx.stop_propagation();
             },
         )
+        // Reordering is handled by the dock: it opens a gap under the
+        // pointer and drops the item there.
         .on_drag(dragged, |dragged, _, _, cx| {
             cx.new(|_| DragPreview(dragged.clone()))
         })
-        .drag_over::<DraggedSlot>(move |style, _, _, _| style.bg(palette.accent_fill))
         .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(palette.accent_fill))
-        .on_drop(move |dragged: &DraggedSlot, _, cx: &mut App| {
-            // Dropping on an item takes its place: after it when moving
-            // forward, before it when moving back.
-            let to = if dragged.index < index {
-                index + 1
-            } else {
-                index
-            };
-            drop_slot.update(cx, |dock, cx| dock.move_item(dragged.index, to, cx));
-            cx.stop_propagation();
-        })
         .on_drop(move |paths: &ExternalPaths, _, cx: &mut App| {
             drop_paths.update(cx, |dock, cx| {
                 dock.add_paths(paths.paths(), Some(index), cx)
             });
             cx.stop_propagation();
         })
+        // The dragged item's own slot stays empty: it is the gap.
+        .when(motion.lifted, |element| element.opacity(0.0))
         .child(arriving.child(content));
 
     let element = if edge.is_vertical() {
-        element.w_full().h(px(SLOT as f32))
+        element.w_full().h(px(SLOT as f32)).top(px(motion.shift))
     } else {
-        element.h_full().w(px(SLOT as f32))
+        element.h_full().w(px(SLOT as f32)).left(px(motion.shift))
     };
     element.into_any_element()
 }

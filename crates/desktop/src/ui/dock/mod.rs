@@ -10,10 +10,10 @@ use domain::geometry::{
 use domain::motion;
 use gpui_kit::{
     Action, Animation, AnimationExt as _, AnyElement, App, AppContext as _, Bounds, Context, Div,
-    Entity, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, PathBuilder, Pixels, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
-    Window,
+    DragMoveEvent, Entity, ExternalPaths, FontWeight, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, PathBuilder,
+    Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TestSupportExt as _, Window,
     assets::IconName,
     base::{Easing, Spring, Transition, spring, transition},
     canvas, div, img, point,
@@ -143,7 +143,8 @@ impl Render for DragPreview {
                 .child(icon(self.0.glyph.clone(), 18.0, gpui_kit::white()))
                 .into_any_element(),
         };
-        div().opacity(0.85).child(artwork)
+        // Lifted out of the dock whole, as the Dock does, not as a ghost.
+        div().child(artwork)
     }
 }
 
@@ -156,6 +157,19 @@ struct SlotMotion {
     arrival: f32,
     /// Running-dot opacity.
     dot: f32,
+    /// How far the item is drawn from its slot along the dock, while items
+    /// part for a drag or settle after one.
+    shift: f32,
+    /// The item being dragged: its slot is the gap.
+    lifted: bool,
+}
+
+/// An item being dragged along the dock.
+#[derive(Clone, Copy, PartialEq)]
+struct Reorder {
+    from: usize,
+    /// The slot under the pointer, where it would land.
+    to: usize,
 }
 
 pub struct DockView {
@@ -163,6 +177,7 @@ pub struct DockView {
     /// The pointer's position along the dock, while it is over it.
     pointer: Option<f32>,
     pressed: Option<usize>,
+    reorder: Option<Reorder>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -176,6 +191,7 @@ impl DockView {
             dock,
             pointer: None,
             pressed: None,
+            reorder: None,
             _subscriptions: subscriptions,
         }
     }
@@ -199,6 +215,7 @@ impl DockView {
         };
         let dragging = cx.has_active_drag();
         let count = items.len();
+        let reorder = self.reorder;
 
         items
             .iter()
@@ -241,10 +258,26 @@ impl DockView {
                     window,
                     cx,
                 );
+                // Each item springs toward where it would sit if the drag
+                // ended now. Tracked in dock coordinates rather than as an
+                // offset, so when the drop reorders the items each one is
+                // already where its new slot puts it, and nothing jumps.
+                let target = reorder.map_or(index, |reorder| {
+                    geometry::reordered_slot(index, reorder.from, reorder.to)
+                });
+                let position = spring(
+                    SharedString::from(format!("position:{id}")),
+                    SLOT as f32 * target as f32,
+                    Spring::new(motion::REORDER).with_damping(motion::REORDER_DAMPING),
+                    window,
+                    cx,
+                );
                 SlotMotion {
                     scale,
                     arrival,
                     dot,
+                    shift: position - SLOT as f32 * index as f32,
+                    lifted: reorder.is_some_and(|reorder| reorder.from == index),
                 }
             })
             .collect()
@@ -253,6 +286,10 @@ impl DockView {
 
 impl Render for DockView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A drag that ended anywhere, dropped or not, lets the items settle.
+        if !cx.has_active_drag() {
+            self.reorder = None;
+        }
         let motions = self.sample_motion(window, cx);
         let view = cx.entity();
         let palette = Palette::new(window, self.dock.read(cx).accessibility);
@@ -314,7 +351,7 @@ impl Render for DockView {
             .collect();
 
         let append_paths = self.dock.clone();
-        let append_slot = self.dock.clone();
+        let (drop_dock, drop_view) = (self.dock.clone(), view.clone());
         let container = div()
             .id("dock")
             .test_support()
@@ -352,8 +389,50 @@ impl Render for DockView {
             .on_drop(move |paths: &ExternalPaths, _, cx: &mut App| {
                 append_paths.update(cx, |dock, cx| dock.add_paths(paths.paths(), None, cx));
             })
+            // Follows a drag of one of the items: the slot under the pointer
+            // opens up. Off the dock, the gap closes back where it came from.
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<DraggedSlot>, _, cx| {
+                    let from = event.drag(cx).index;
+                    let (along, across, length, thickness) = if vertical {
+                        (
+                            event.event.position.y - event.bounds.top(),
+                            event.event.position.x - event.bounds.left(),
+                            event.bounds.size.height,
+                            event.bounds.size.width,
+                        )
+                    } else {
+                        (
+                            event.event.position.x - event.bounds.left(),
+                            event.event.position.y - event.bounds.top(),
+                            event.bounds.size.width,
+                            event.bounds.size.height,
+                        )
+                    };
+                    let over = along >= px(0.0)
+                        && along <= length
+                        && across >= px(0.0)
+                        && across <= thickness;
+                    let to = if over {
+                        geometry::drop_slot(f64::from(f32::from(along)), count)
+                    } else {
+                        from
+                    };
+                    let reorder = Some(Reorder { from, to });
+                    if this.reorder != reorder {
+                        this.reorder = reorder;
+                        cx.notify();
+                    }
+                }),
+            )
             .on_drop(move |dragged: &DraggedSlot, _, cx: &mut App| {
-                append_slot.update(cx, |dock, cx| dock.move_item(dragged.index, count, cx));
+                let to = drop_view
+                    .read(cx)
+                    .reorder
+                    .map_or(dragged.index, |reorder| reorder.to);
+                // `move_item` takes the position before removal.
+                let before = if to > dragged.index { to + 1 } else { to };
+                drop_dock.update(cx, |dock, cx| dock.move_item(dragged.index, before, cx));
             })
             .children(slots);
         if vertical {

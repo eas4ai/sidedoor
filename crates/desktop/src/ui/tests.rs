@@ -12,9 +12,9 @@ use domain::clipboard::{ClipKind, History};
 use domain::config::{Appearance, Config, ItemConfig};
 use domain::geometry::{self, Edge, Point};
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, InputEvent as _, Modifiers,
-    MouseMoveEvent, SharedString, TestAppContext, Window, WindowBounds, WindowOptions, point, px,
-    size, test::TestWindowExt as _,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, InputEvent as _, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, TestAppContext, Window,
+    WindowBounds, WindowOptions, point, px, size, test::TestWindowExt as _,
 };
 use plugin_host::{HostMessage, PluginMessage};
 use services::weather::Place;
@@ -277,6 +277,123 @@ fn dragging_reorders_and_saves(cx: &mut TestAppContext) {
             app("com.example.alpha"),
         ])
     );
+}
+
+#[gpui_kit::test]
+fn dragging_parts_the_items_under_the_pointer_like_the_dock(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![
+            app("com.example.alpha"),
+            app("com.example.beta"),
+            app("com.example.gamma"),
+            app("com.example.delta"),
+        ],
+    );
+    let center = |cx: &mut TestAppContext, id: &str| {
+        let id = SharedString::from(format!("app:com.example.{id}"));
+        cx.update_window(h.dock_window, |_, window, cx| {
+            window.render_frame(cx);
+            window.find(id).bounds().center()
+        })
+        .unwrap()
+    };
+    let (alpha, beta, gamma, delta) = (
+        center(cx, "alpha"),
+        center(cx, "beta"),
+        center(cx, "gamma"),
+        center(cx, "delta"),
+    );
+    let pointer = |cx: &mut TestAppContext, to: gpui_kit::Point<gpui_kit::Pixels>| {
+        cx.update_window(h.dock_window, |_, window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: to,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        })
+        .unwrap();
+    };
+
+    // Pick up alpha and hold it over gamma.
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: alpha,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    })
+    .unwrap();
+    for step in 1..=8 {
+        let t = step as f32 / 8.0;
+        pointer(
+            cx,
+            point(
+                alpha.x + (gamma.x - alpha.x) * t,
+                alpha.y + (gamma.y - alpha.y) * t,
+            ),
+        );
+    }
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    pointer(cx, gamma);
+
+    // Beta and gamma have slid up to close alpha's spot and open a gap
+    // under the pointer; delta stays. Nothing is saved yet.
+    let near = |a: gpui_kit::Point<gpui_kit::Pixels>, b: gpui_kit::Point<gpui_kit::Pixels>| {
+        (f32::from(a.x) - f32::from(b.x)).abs() < 1.0
+            && (f32::from(a.y) - f32::from(b.y)).abs() < 1.0
+    };
+    assert!(
+        near(center(cx, "beta"), alpha),
+        "beta should move into alpha's slot"
+    );
+    assert!(
+        near(center(cx, "gamma"), beta),
+        "gamma should move into beta's slot"
+    );
+    assert!(near(center(cx, "delta"), delta));
+    assert!(h.platform.saved_configs.borrow().is_empty());
+
+    // Letting go drops alpha into the gap, and nothing jumps: each item is
+    // already where its new slot is.
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: gamma,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        h.item_ids(cx),
+        [
+            "app:com.example.beta",
+            "app:com.example.gamma",
+            "app:com.example.alpha",
+            "app:com.example.delta"
+        ]
+    );
+    assert!(near(center(cx, "beta"), alpha));
+    assert!(near(center(cx, "alpha"), gamma));
 }
 
 #[gpui_kit::test]

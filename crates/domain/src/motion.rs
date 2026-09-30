@@ -59,6 +59,12 @@ pub const MAGNIFY: f32 = 0.14;
 const MAGNIFY_REACH: f32 = 1.1;
 /// A switch's thumb sliding across, settling with a hint of spring.
 pub const SWITCH: Motion = motion(260, 0.3, 1.12, 0.4, 1.0);
+/// Dock items sliding apart to make room for one being dragged, and into
+/// place after a drop: a spring, so a gap that moves with the pointer
+/// redirects smoothly. Its response, and a damping just under critical for
+/// a slight settle.
+pub const REORDER: Duration = Duration::from_millis(300);
+pub const REORDER_DAMPING: f32 = 0.86;
 /// Scale of an item while it is pressed.
 pub const PRESSED: f32 = 0.86;
 

@@ -206,6 +206,7 @@ All values are in `crates/domain/src/motion.rs`.
 | `CARD_MOVE` | 170 ms | Plain ease-out, never wobbles |
 | `CARD_OUT` | 140 ms | Shrinks to 95% and fades |
 | `WINDOW_IN` | 180 ms | Fade in |
+| `REORDER` | 300 ms spring | Items part for a dragged icon and settle after the drop |
 
 Some smaller rules:
 
@@ -231,6 +232,10 @@ Some smaller rules:
 
 ## Interaction details
 
+- Dragging an icon works like the Dock: it lifts out whole, its spot
+  closes, and its neighbors slide apart to open a gap under the pointer.
+  Dropping it lands it in the gap; dragging it off the dock puts the gap
+  back where it came from.
 - Right-click shows a context menu, as on any Mac. A plugin's own actions go at
   the top, in order.
 - Menu items and buttons use Mac title case. A menu command that asks for more

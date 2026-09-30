@@ -170,6 +170,24 @@ pub fn slot_center(dock: Rect, edge: Edge, index: usize) -> Point {
     }
 }
 
+/// The slot a dragged item would land in, given the pointer's distance
+/// from the start of the dock (in the dock's own coordinates, along its main
+/// axis) and how many items it holds.
+pub fn drop_slot(along: f64, count: usize) -> usize {
+    let slot = ((along - DOCK_PADDING) / SLOT).floor().max(0.0) as usize;
+    slot.min(count.saturating_sub(1))
+}
+
+/// Where item `index` sits while the item at `from` is dragged over slot
+/// `to`: the dragged item's old spot closes, and a gap opens at `to`.
+pub fn reordered_slot(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        return to;
+    }
+    let closed = if index > from { index - 1 } else { index };
+    if closed >= to { closed + 1 } else { closed }
+}
+
 /// Which side of a card window carries the arrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrowSide {
@@ -567,6 +585,24 @@ mod tests {
             frame: Rect::new(0.0, 0.0, 1512.0, 982.0),
             visible: Rect::new(0.0, 0.0, 1512.0, 949.0),
         }
+    }
+
+    #[test]
+    fn dragging_opens_a_gap_under_the_pointer() {
+        // Over the padding or past the end, the nearest slot.
+        assert_eq!(drop_slot(0.0, 4), 0);
+        assert_eq!(drop_slot(DOCK_PADDING + SLOT * 2.5, 4), 2);
+        assert_eq!(drop_slot(DOCK_PADDING + SLOT * 9.0, 4), 3);
+        // Dragging the first of four onto the third: the second and third
+        // move up, the fourth stays.
+        let order: Vec<usize> = (0..4).map(|i| reordered_slot(i, 0, 2)).collect();
+        assert_eq!(order, [2, 0, 1, 3]);
+        // And back: the ones in between move down.
+        let order: Vec<usize> = (0..4).map(|i| reordered_slot(i, 3, 1)).collect();
+        assert_eq!(order, [0, 2, 3, 1]);
+        // Over its own slot nothing moves.
+        let order: Vec<usize> = (0..4).map(|i| reordered_slot(i, 1, 1)).collect();
+        assert_eq!(order, [0, 1, 2, 3]);
     }
 
     #[test]
