@@ -22,6 +22,7 @@ and build automation. Application sources and assets belong to crates.
 │   ├── services/src/             # Persistence, weather, stats and image IO
 │   └── plugin-host/src/          # Manifest, protocol, discovery, installs from links, runtime, reload and SDK
 ├── sdk/                          # Independent Bun/TypeScript package
+├── skills/sidedoor-plugins/      # Agent skill for writing plugins (linked from .claude/skills)
 ├── scripts/
 │   ├── package/                  # macos.sh, windows.ps1 and linux.sh
 │   └── smoke/                    # windows.ps1

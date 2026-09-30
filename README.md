@@ -103,6 +103,12 @@ Plugins run with the same access as the app, so only add ones from people
 you trust. The [SDK guide](sdk/README.md) covers settings, tiles, windows,
 native data, testing and sharing.
 
+Building with an AI coding agent? The
+[`sidedoor-plugins` skill](skills/sidedoor-plugins/SKILL.md) teaches it the
+SDK, the workflow and the pitfalls. Claude Code picks it up automatically in
+this repository. To use it elsewhere, copy the folder into your agent's
+skills directory (for Claude Code, `~/.claude/skills/`).
+
 ## Platform notes
 
 ### macOS
