@@ -1,0 +1,96 @@
+name: Release
+# Publish a release as a pre-release to build it: every platform's package
+# is attached to it, and once all of them are there it becomes the latest
+# release. If a build fails it stays a pre-release; re-run the failed jobs.
+on:
+  release:
+    types: [prereleased]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of an existing release to build and publish
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+          - name: Linux
+            os: ubuntu-24.04
+          - name: Windows
+            os: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: oven-sh/setup-bun@v2
+        if: runner.os != 'Windows'
+        with:
+          bun-version: '1.4.2'
+      - uses: oven-sh/setup-bun@v2
+        if: runner.os == 'Windows'
+        with:
+          bun-version: '1.4.2'
+          # Ship the x64 baseline runtime so widgets also work on older CPUs.
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-windows-x64-baseline.zip
+      - name: Rust toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+          cache-on-failure: true
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install librsvg
+          SIDEDOOR_VERSION="${TAG#v}" ./scripts/package/macos.sh
+          cd target/release/bundle
+          ditto -c -k --keepParent Sidedoor.app Sidedoor-macos-arm64.zip
+          shasum -a 256 Sidedoor-macos-arm64.zip > Sidedoor-macos-arm64.zip.sha256
+          gh release upload "$TAG" Sidedoor-macos-arm64.zip Sidedoor-macos-arm64.zip.sha256 --clobber
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev
+          SIDEDOOR_VERSION="${TAG#v}" ./scripts/package/linux.sh
+          cd target/release/bundle
+          sha256sum Sidedoor-linux-x86_64.tar.gz > Sidedoor-linux-x86_64.tar.gz.sha256
+          gh release upload "$TAG" Sidedoor-linux-x86_64.tar.gz Sidedoor-linux-x86_64.tar.gz.sha256 --clobber
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/package/windows.ps1
+          Set-Location target/windows-bundle
+          gh release upload "$env:TAG" Sidedoor-windows-x64.zip Sidedoor-windows-x64.zip.sha256 --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  publish:
+    name: Mark as latest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$TAG" --prerelease=false --latest
