@@ -187,6 +187,36 @@ fn hovering_an_item_opens_its_card_until_the_pointer_leaves(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn the_dock_hides_even_if_the_pointer_left_without_a_hover_event(cx: &mut TestAppContext) {
+    let h = setup(cx, vec![app("com.example.alpha"), app("com.example.beta")]);
+    cx.run_until_parked();
+    h.reveal(cx);
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("app:com.example.alpha", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("app:com.example.alpha"));
+
+    // A quick flick out of the panel: the window never hears the pointer
+    // leave, so only the polled position says it is gone. It is 200 points
+    // from the dock, well clear of the tooltip.
+    let dock = cx.update(|cx| h.dock.read(cx).frame());
+    *h.platform.pointer.borrow_mut() = Point {
+        x: dock.x - 200.0,
+        y: dock.mid_y(),
+    };
+    for _ in 0..8 {
+        cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pointer(cx)));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+    }
+    assert_eq!(h.open_card_id(cx), None);
+    assert!(!cx.update(|cx| h.dock.read(cx).is_shown()));
+}
+
+#[gpui_kit::test]
 fn moving_onto_the_card_keeps_it_open(cx: &mut TestAppContext) {
     let h = setup(cx, vec![ItemConfig::Clipboard]);
     cx.run_until_parked();

@@ -1185,7 +1185,7 @@ impl Dock {
             return;
         }
         self.edge = edge;
-        self.reveal.show_for(Instant::now(), PEEK);
+        self.reveal.show_for(cx.background_executor().now(), PEEK);
         self.items_changed(cx);
     }
 
@@ -1287,7 +1287,7 @@ impl Dock {
     }
 
     fn peek(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.reveal.show_for(Instant::now(), PEEK);
+        self.reveal.show_for(cx.background_executor().now(), PEEK);
         self.close_card = None;
         self.card = Some(index);
         cx.notify();
@@ -1491,6 +1491,23 @@ impl Dock {
             self.screen = screen;
             cx.notify();
         }
+        // The windows report the pointer leaving an item or a card, but a
+        // quick flick out of a panel can leave without that report, and a
+        // card still open would then hold the dock up. The polled position
+        // settles it: away from the dock and the card, nothing is hovered.
+        let pointer = self.platform.pointer();
+        if (self.pointer_on_item.is_some() || self.pointer_on_card)
+            && !geometry::near_dock(pointer, self.screen, self.edge, self.frame())
+            && !self
+                .card_frame
+                .is_some_and(|card| geometry::near_card(pointer, card))
+        {
+            self.pointer_on_item = None;
+            self.pointer_on_card = false;
+            if self.close_card.is_none() {
+                self.schedule_close(cx);
+            }
+        }
         let keep = self
             .card
             .map(|_| geometry::card_zone(self.screen, self.frame(), self.edge));
@@ -1500,7 +1517,7 @@ impl Dock {
             self.edge,
             self.frame(),
             keep,
-            Instant::now(),
+            cx.background_executor().now(),
         );
         if changed {
             if !self.reveal.is_shown() {

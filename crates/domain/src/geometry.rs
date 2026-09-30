@@ -499,6 +499,24 @@ pub fn card_zone(screen: Screen, dock: Rect, edge: Edge) -> Rect {
     }
 }
 
+/// Whether `pointer` is on the dock or within a few points of it, counting
+/// the strip between the dock and the screen edge behind it.
+pub fn near_dock(pointer: Point, screen: Screen, edge: Edge, dock: Rect) -> bool {
+    let frame = screen.frame;
+    let edge_strip = match edge {
+        Edge::Right => Rect::new(dock.x, dock.y, frame.max_x() - dock.x, dock.height),
+        Edge::Left => Rect::new(frame.x, dock.y, dock.max_x() - frame.x, dock.height),
+        Edge::Bottom => Rect::new(dock.x, frame.y, dock.width, dock.max_y() - frame.y),
+    };
+    edge_strip.inflate(HOVER_SLOP).contains(pointer)
+}
+
+/// Whether `pointer` is on an open card or tooltip, or in the gap between it
+/// and the dock.
+pub fn near_card(pointer: Point, card: Rect) -> bool {
+    card.inflate(CARD_GAP + 1.0).contains(pointer)
+}
+
 /// Tracks whether the dock is shown, from polled pointer positions.
 ///
 /// The dock appears when the pointer touches the screen edge beside it, and
@@ -554,13 +572,7 @@ impl Reveal {
             return false;
         }
 
-        // The dock, grown to reach the screen edge behind it.
-        let edge_strip = match edge {
-            Edge::Right => Rect::new(dock.x, dock.y, frame.max_x() - dock.x, dock.height),
-            Edge::Left => Rect::new(frame.x, dock.y, dock.max_x() - frame.x, dock.height),
-            Edge::Bottom => Rect::new(dock.x, frame.y, dock.width, dock.max_y() - frame.y),
-        };
-        let inside = edge_strip.inflate(HOVER_SLOP).contains(pointer)
+        let inside = near_dock(pointer, screen, edge, dock)
             || keep.is_some_and(|area| area.contains(pointer));
         if inside {
             self.outside_since = None;
