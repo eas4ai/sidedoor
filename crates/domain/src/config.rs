@@ -27,6 +27,12 @@ pub struct Config {
     /// Plugins the user agreed to run, by id. Built-ins are always trusted.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub trusted_plugins: BTreeSet<String>,
+    #[serde(default = "default_update_checks")]
+    pub automatically_check_for_updates: bool,
+}
+
+fn default_update_checks() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -157,6 +163,7 @@ impl Config {
             shortcuts: default_shortcuts(),
             plugin_settings: BTreeMap::new(),
             trusted_plugins: BTreeSet::new(),
+            automatically_check_for_updates: true,
         }
     }
 
@@ -267,6 +274,7 @@ mod tests {
         assert_eq!(config.appearance, Appearance::System);
         assert_eq!(config.weather, WeatherLocation::default());
         assert_eq!(config.shortcuts, default_shortcuts());
+        assert!(config.automatically_check_for_updates);
         let none: Config = serde_json::from_str(r#"{"items":[],"shortcuts":{}}"#).unwrap();
         assert!(none.shortcuts.is_empty());
     }

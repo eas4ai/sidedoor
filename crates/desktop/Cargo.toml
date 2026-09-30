@@ -23,4 +23,5 @@ futures.workspace = true
 winresource = "0.1.30"
 
 [dev-dependencies]
+tempfile = "3"
 gpui-kit = { workspace = true, features = ["test-support"] }

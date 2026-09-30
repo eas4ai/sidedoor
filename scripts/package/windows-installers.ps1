@@ -32,9 +32,11 @@ New-Item -ItemType Directory -Force $Work | Out-Null
 $Icon = Join-Path $Root "crates/desktop/assets/icons/icon.ico"
 $Msi = Join-Path $Out "Sidedoor-windows-x64.msi"
 $Setup = Join-Path $Out "Sidedoor-windows-x64-setup.exe"
+$Marker = Join-Path $Work "installation-marker.txt"
+Set-Content -Encoding ascii $Marker 'Sidedoor Windows Installer installation'
 & "$Wix/heat.exe" dir $App -nologo -ag -srd -sreg -scom -dr INSTALLFOLDER -cg AppFiles -var var.SourceDir -t "$PSScriptRoot/windows/Shortcuts.xsl" -out "$Work/Files.wxs"
 if ($LASTEXITCODE -ne 0) { throw "WiX payload harvesting failed" }
-& "$Wix/candle.exe" -nologo -arch x64 "-dSourceDir=$App" "-dVersion=$MsiVersion" "-dIcon=$Icon" -out "$Work/" "$PSScriptRoot/windows/Product.wxs" "$Work/Files.wxs"
+& "$Wix/candle.exe" -nologo -arch x64 "-dSourceDir=$App" "-dVersion=$MsiVersion" "-dIcon=$Icon" "-dMarker=$Marker" -out "$Work/" "$PSScriptRoot/windows/Product.wxs" "$Work/Files.wxs"
 if ($LASTEXITCODE -ne 0) { throw "WiX MSI compilation failed" }
 & "$Wix/light.exe" -nologo -out $Msi "$Work/Product.wixobj" "$Work/Files.wixobj"
 if ($LASTEXITCODE -ne 0) { throw "WiX MSI linking failed" }

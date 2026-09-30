@@ -10,9 +10,18 @@
     <Icon Id="AppIcon.ico" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/lassejlv/sidedoor" />
+    <Property Id="SIDEDOOR_BUNDLE" Value="0" Secure="yes" />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="Sidedoor" />
+        <Directory Id="INSTALLFOLDER" Name="Sidedoor">
+          <Component Id="MsiMarker" Guid="FCA5DD6E-7D6E-4F8F-A6ED-5E0684069FB7" Win64="yes">
+            <File Id="MsiMarkerFile" Name=".sidedoor-msi" Source="$(var.Marker)" KeyPath="yes" />
+          </Component>
+          <Component Id="BundleMarker" Guid="C8E1A8D3-C2E3-414E-BA19-02F2DC6D99DE" Win64="yes">
+            <Condition>SIDEDOOR_BUNDLE = 1</Condition>
+            <File Id="BundleMarkerFile" Name=".sidedoor-bundle" Source="$(var.Marker)" KeyPath="yes" />
+          </Component>
+        </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Directory Id="AppMenuFolder" Name="Sidedoor" />
@@ -20,6 +29,8 @@
     </Directory>
     <Feature Id="Complete" Title="Sidedoor" Level="1">
       <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="MsiMarker" />
+      <ComponentRef Id="BundleMarker" />
     </Feature>
   </Product>
 </Wix>

@@ -22,6 +22,7 @@ function Assert-Installed {
         if ((Get-FileHash $File.FullName).Hash -ne (Get-FileHash $Destination).Hash) { throw "Installed file differs: $Relative" }
     }
     if (-not (Test-Path $Shortcut)) { throw "Start menu shortcut missing" }
+    if (-not (Test-Path "$Installed/.sidedoor-msi")) { throw "Installer ownership marker missing" }
     & "$Installed/bun.exe" --version
     if ($LASTEXITCODE -ne 0) { throw "Installed Bun cannot run" }
 }
@@ -39,6 +40,7 @@ foreach ($File in @($Msi, $Setup)) {
 try {
     Invoke-Installer "msiexec.exe" "/i `"$Msi`" /qn /norestart /l*v `"$Logs/msi-install.log`""
     Assert-Installed
+    if (Test-Path "$Installed/.sidedoor-bundle") { throw "MSI misidentified as a setup installation" }
     & "$PSScriptRoot/windows.ps1" -App $Installed -Log "$Out/installer-smoke"
 } finally {
     Invoke-Installer "msiexec.exe" "/x `"$Msi`" /qn /norestart /l*v `"$Logs/msi-uninstall.log`""
@@ -47,6 +49,7 @@ Assert-Uninstalled
 try {
     Invoke-Installer $Setup "/quiet /norestart /log `"$Logs/setup-install.log`""
     Assert-Installed
+    if (-not (Test-Path "$Installed/.sidedoor-bundle")) { throw "Setup ownership marker missing" }
 } finally {
     Invoke-Installer $Setup "/uninstall /quiet /norestart /log `"$Logs/setup-uninstall.log`""
 }

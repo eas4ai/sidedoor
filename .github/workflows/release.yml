@@ -96,4 +96,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - name: Verify all payloads and publish update manifest
+        run: |
+          gh release download "$TAG" --pattern 'Sidedoor-*' --dir target/release/update-assets
+          python3 scripts/package/update-manifest.py "$TAG" target/release/update-assets
+          gh release upload "$TAG" target/release/update-assets/sidedoor-update.json --clobber
       - run: gh release edit "$TAG" --prerelease=false --latest

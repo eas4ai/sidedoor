@@ -290,7 +290,7 @@ impl Render for SettingsWindow {
         let dock = self.dock.read(cx);
         let sections = match self.tab {
             Tab::Plugins => plugins.unwrap_or_default(),
-            Tab::General => general_page(&self.dock, dock, palette),
+            Tab::General => general_page(&self.dock, dock, palette, cx),
             Tab::Dock => dock_page(&self.dock, dock, palette),
             Tab::Items => items_page(&view, &self.dock, dock, palette),
             Tab::Weather => weather_page(&view, &self.city, &self.places, dock, palette),

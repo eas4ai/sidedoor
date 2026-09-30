@@ -3,6 +3,7 @@ pub(crate) mod dock;
 pub(crate) mod host;
 pub(crate) mod plugin_bridge;
 mod shortcuts;
+pub(crate) mod updates;
 mod windows;
 use self::host as platform;
 use crate::ui::{
@@ -219,6 +220,9 @@ fn init(cx: &mut App) -> Result<(), String> {
     panels.sync(&dock, cx);
     cx.observe(&dock, move |dock, cx| panels.sync(&dock, cx))
         .detach();
+    if std::env::args().any(|argument| argument == "--settings") {
+        cx.dispatch_action(&OpenSettings);
+    }
     Ok(())
 }
 
@@ -255,6 +259,8 @@ pub fn run() {
             if let Err(err) = init(cx) {
                 eprintln!("sidedoor: {err}");
                 cx.quit();
+            } else {
+                updates::acknowledge_startup();
             }
         });
 }

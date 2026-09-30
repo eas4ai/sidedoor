@@ -203,6 +203,36 @@ version. Windows Installer compares only the numeric `major.minor.patch`, so
 use a new numeric version for each Windows upgrade. DEB and RPM preserve
 prerelease ordering with `~`.
 
+### Updates
+
+Sidedoor checks stable GitHub releases at startup and every six hours. Open
+**Settings › General › Updates** to check manually, download an update, and
+choose **Install and restart**. Automatic checks can be turned off there.
+Downloads are checked against the release manifest's size and SHA-256 digest;
+an interrupted or invalid download leaves the installation untouched.
+
+macOS updates replace the complete app bundle, including Bun and plugins.
+Portable Windows/Linux updates replace the complete application folder. These
+installs retain a backup until the new process reports that startup succeeded,
+and restore it if replacement or startup fails. The installation's parent
+folder must be writable. MSI and setup installations use their respective
+Windows installers; DEB and RPM installations use `apt-get` and `dnf` through
+`pkexec`. These managed installs request system authentication and rely on the
+installer/package manager for recovery. Linux package updates need `pkexec`
+and a desktop authentication agent.
+
+Settings, plugins, and clipboard history remain in the user data folder.
+Update logs are kept in the app's cache under `updates/last-update.log`.
+Updates trust this repository's GitHub release metadata over HTTPS; the
+checksum manifest is not an independent publisher signature. macOS verifies
+the complete bundle's existing signature and identity. Current releases are
+still ad hoc signed on macOS and unsigned on Windows.
+
+The release workflow publishes `sidedoor-update.json` after checking all eight
+payloads and their checksums, then promotes the release to latest. Older
+releases without this manifest must be downloaded manually. Only packaged
+installations can update in place; development binaries keep using the checkout.
+
 ## Project layout
 
 The root is a virtual Cargo workspace. `cargo run` starts the `desktop`

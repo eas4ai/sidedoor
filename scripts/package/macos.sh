@@ -83,7 +83,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>${VERSION%%-*}</string>
+    <string>${VERSION%%[-+]*}</string>
     <key>CFBundleVersion</key>
     <string>$BUILD</string>
     <key>LSApplicationCategoryType</key>

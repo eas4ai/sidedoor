@@ -7,7 +7,7 @@ use domain::config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation}
 use domain::geometry::{self, Edge, Rect, Reveal, Screen};
 use domain::shortcut::Shortcut;
 use futures::StreamExt as _;
-use gpui_kit::{Context, EventEmitter, SharedString, Task};
+use gpui_kit::{AppContext as _, Context, EventEmitter, SharedString, Task};
 use plugin_host::{
     ClipboardCommand, DataSource, HostMessage, Installer, Manifest, Node, PluginLink,
     PluginMessage, Staged, apply_patches,
@@ -179,6 +179,8 @@ pub struct Services {
 }
 
 pub struct Dock {
+    pub app_updates: gpui_kit::Entity<super::updates::AppUpdates>,
+    pub automatic_update_checks: bool,
     platform: Rc<dyn Host>,
     pub items: Vec<DockItem>,
     pub edge: Edge,
@@ -227,6 +229,7 @@ pub struct Dock {
     pub updates: HashMap<String, UpdateState>,
     update_tasks: HashMap<String, Task<()>>,
     _observe_self: Option<gpui_kit::Subscription>,
+    _observe_updates: gpui_kit::Subscription,
     _quit: Option<gpui_kit::Subscription>,
     _tasks: Vec<Task<()>>,
 }
@@ -284,7 +287,19 @@ impl Dock {
         let weather_task = services
             .live
             .then(|| Self::weather_task(config.weather.clone(), cx));
+        let automatic_update_checks = config.automatically_check_for_updates;
+        let app_updates = cx.new(|cx| {
+            super::updates::AppUpdates::new(
+                automatic_update_checks,
+                services.live,
+                platform.clone(),
+                cx,
+            )
+        });
+        let observe_updates = cx.observe(&app_updates, |_, _, cx| cx.notify());
         Self {
+            app_updates,
+            automatic_update_checks,
             running: platform.running_bundle_ids(),
             accessibility: platform.accessibility(),
             pasteboard_count: platform.pasteboard_change_count(),
@@ -318,6 +333,7 @@ impl Dock {
             updates: HashMap::new(),
             update_tasks: HashMap::new(),
             _observe_self: None,
+            _observe_updates: observe_updates,
             _quit: quit,
             _tasks: tasks,
         }
@@ -1298,10 +1314,21 @@ impl Dock {
                 .collect(),
             plugin_settings: self.plugin_settings.clone(),
             trusted_plugins: self.trusted.clone(),
+            automatically_check_for_updates: self.automatic_update_checks,
         };
         if let Err(err) = self.platform.save_config(&config) {
             eprintln!("sidedoor: couldn't save the dock: {err}");
         }
+    }
+
+    pub fn set_automatic_update_checks(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.automatic_update_checks = enabled;
+        self.app_updates.update(cx, |updates, cx| {
+            updates.automatic = enabled;
+            cx.notify();
+        });
+        self.save_config();
+        cx.notify();
     }
 
     // MARK: Clipboard

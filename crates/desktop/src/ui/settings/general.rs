@@ -1,9 +1,13 @@
 use super::*;
+use crate::app::updates::{State as AppUpdateState, VERSION};
+use gpui_kit::base::Disableable as _;
+use gpui_kit::component::{Sizable as _, button::Button, switch::Switch};
 
 pub(super) fn general_page(
     dock_entity: &Entity<Dock>,
     dock: &Dock,
     palette: Palette,
+    cx: &App,
 ) -> Vec<AnyElement> {
     let login = dock.login_item();
     let detail: Option<SharedString> = match login {
@@ -67,6 +71,83 @@ pub(super) fn general_page(
             |window, cx| window.dispatch_action(Box::new(OpenConfigFile), cx),
         ));
 
+    let updates = dock.app_updates.clone();
+    let state = &updates.read(cx).state;
+    let (status, label, enabled) = match state {
+        AppUpdateState::Idle => (format!("Version {VERSION}"), "Check for updates", true),
+        AppUpdateState::Checking => ("Checking for updates…".into(), "Checking…", false),
+        AppUpdateState::Current => (
+            format!("Sidedoor {VERSION} is up to date."),
+            "Check for updates",
+            true,
+        ),
+        AppUpdateState::Available(release) => (
+            format!("Version {} is available.", release.version),
+            "Download update",
+            true,
+        ),
+        AppUpdateState::Downloading(release) => (
+            format!("Downloading and verifying version {}…", release.version),
+            "Downloading…",
+            false,
+        ),
+        AppUpdateState::Ready(release) => (
+            if release.installation.needs_admin() {
+                format!(
+                    "Version {} is ready. System authentication is required to install.",
+                    release.version
+                )
+            } else {
+                format!(
+                    "Version {} is ready. Sidedoor will close and reopen.",
+                    release.version
+                )
+            },
+            "Install and restart",
+            true,
+        ),
+        AppUpdateState::Installing => ("Preparing to restart…".into(), "Installing…", false),
+        AppUpdateState::Failed(error) => (error.clone(), "Try again", true),
+    };
+    let handler = updates.clone();
+    let action = Button::new("app-update-action")
+        .small()
+        .label(label)
+        .disabled(!enabled)
+        .on_click(move |_, _, cx| {
+            handler.update(cx, |updates, cx| match updates.state {
+                AppUpdateState::Available(_) => updates.download(cx),
+                AppUpdateState::Ready(_) => updates.restart(cx),
+                _ => updates.check(false, cx),
+            })
+        });
+    let ready = matches!(state, AppUpdateState::Ready(_));
+    let handler = updates.clone();
+    let actions = div()
+        .flex()
+        .gap(px(8.0))
+        .child(action)
+        .when(ready, |buttons| {
+            buttons.child(
+                Button::new("discard-app-update")
+                    .small()
+                    .label("Discard download")
+                    .on_click(move |_, _, cx| {
+                        handler.update(cx, |updates, cx| updates.discard(cx))
+                    }),
+            )
+        });
+    let handler = dock_entity.clone();
+    let automatic = Switch::new("automatic-app-updates")
+        .small()
+        .accessibility_label("Check for updates automatically")
+        .checked(dock.automatic_update_checks)
+        .on_change(move |enabled, _, cx| {
+            handler.update(cx, |dock, cx| {
+                dock.set_automatic_update_checks(*enabled, cx)
+            })
+        });
+
     vec![
         section(
             Some("Startup"),
@@ -93,6 +174,20 @@ pub(super) fn general_page(
             palette,
         ),
         section(
+            Some("Updates"),
+            vec![
+                row("Sidedoor", Some(status.into()), actions, palette),
+                row(
+                    "Check automatically",
+                    Some("At startup and every six hours. You choose when to install.".into()),
+                    automatic,
+                    palette,
+                ),
+            ],
+            None,
+            palette,
+        ),
+        section(
             Some("Advanced"),
             vec![row(
                 "Settings file",
@@ -108,10 +203,7 @@ pub(super) fn general_page(
             .justify_center()
             .text_size(px(text::SUBHEADLINE))
             .text_color(palette.tertiary)
-            .child(format!(
-                "Sidedoor {} · Weather by Open-Meteo",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .child(format!("Sidedoor {} · Weather by Open-Meteo", VERSION))
             .into_any_element(),
     ]
 }

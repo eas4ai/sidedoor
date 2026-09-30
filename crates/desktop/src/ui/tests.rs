@@ -957,6 +957,196 @@ fn general_settings_toggle_launch_at_login(cx: &mut TestAppContext) {
     assert_eq!(*h.platform.login.borrow(), LoginItem::Off);
 }
 
+struct UpdateBackend {
+    checks: std::sync::atomic::AtomicUsize,
+    downloads: std::sync::atomic::AtomicUsize,
+    fail_download: bool,
+    staged: std::sync::Mutex<Option<PathBuf>>,
+}
+
+impl services::updates::Backend for UpdateBackend {
+    fn check(&self, _: &str) -> Result<Option<services::updates::Release>, String> {
+        self.checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(services::updates::Release {
+            version: "2.0.0".into(), notes: "A new dock update".into(),
+            installation: services::updates::Installation {
+                owner: services::updates::Owner::MacBundle, os: "macos".into(), arch: "arm64".into(),
+                root: PathBuf::from("/Applications/Sidedoor.app"), executable: PathBuf::from("/Applications/Sidedoor.app/Contents/MacOS/sidedoor"),
+            },
+            asset: services::updates::ManifestAsset { name: "Sidedoor-macos-arm64.zip".into(), size: 42, sha256: "a".repeat(64) },
+            url: "https://github.com/lassejlv/sidedoor/releases/download/v2.0.0/Sidedoor-macos-arm64.zip".into(),
+        }))
+    }
+    fn prepare(
+        &self,
+        release: &services::updates::Release,
+    ) -> Result<services::updates::Prepared, String> {
+        self.downloads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_download {
+            return Err("Update verification failed. Nothing was installed.".into());
+        }
+        let staging = tempfile::tempdir().unwrap();
+        *self.staged.lock().unwrap() = Some(staging.path().to_path_buf());
+        Ok(services::updates::Prepared {
+            release: release.clone(),
+            payload: staging.path().join("Sidedoor.app"),
+            staging,
+        })
+    }
+    fn launch(&self, _: services::updates::Prepared) -> Result<(), String> {
+        Err("The installation folder isn't writable.".into())
+    }
+}
+
+fn update_backend(
+    h: &SettingsHarness,
+    fail_download: bool,
+    cx: &mut TestAppContext,
+) -> std::sync::Arc<UpdateBackend> {
+    let backend = std::sync::Arc::new(UpdateBackend {
+        checks: std::sync::atomic::AtomicUsize::new(0),
+        downloads: std::sync::atomic::AtomicUsize::new(0),
+        fail_download,
+        staged: std::sync::Mutex::new(None),
+    });
+    cx.update(|cx| {
+        h.dock
+            .read(cx)
+            .app_updates
+            .clone()
+            .update(cx, |updates, _| updates.use_test_backend(backend.clone()))
+    });
+    backend
+}
+
+#[gpui_kit::test]
+fn automatic_app_updates_check_after_startup_and_every_six_hours(cx: &mut TestAppContext) {
+    use crate::app::updates::AppUpdates;
+    use std::sync::atomic::Ordering;
+    let h = open_settings(cx, vec![]);
+    let backend = update_backend(&h, false, cx);
+    let updates = cx.update(|cx| {
+        cx.new(|cx| AppUpdates::with_backend(true, true, h.platform.clone(), backend.clone(), cx))
+    });
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 0);
+    cx.executor().advance_clock(Duration::from_secs(10));
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 1);
+    cx.executor()
+        .advance_clock(Duration::from_secs(6 * 60 * 60));
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 2);
+    cx.update(|cx| updates.update(cx, |updates, _| updates.automatic = false));
+    cx.executor()
+        .advance_clock(Duration::from_secs(6 * 60 * 60));
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 2);
+    // A manual check still works when automatic checks are disabled, and
+    // repeated requests don't start overlapping operations.
+    cx.update(|cx| {
+        updates.update(cx, |updates, cx| {
+            updates.check(false, cx);
+            updates.check(false, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 3);
+    cx.update(|cx| updates.update(cx, |updates, cx| updates.download(cx)));
+    cx.run_until_parked();
+    cx.update(|cx| updates.update(cx, |updates, _| updates.automatic = true));
+    cx.executor()
+        .advance_clock(Duration::from_secs(6 * 60 * 60));
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 3);
+}
+
+#[gpui_kit::test]
+fn app_updates_check_download_discard_and_keep_failed_install_usable(cx: &mut TestAppContext) {
+    use crate::app::updates::State;
+    use std::sync::atomic::Ordering;
+    let h = open_settings(cx, vec![]);
+    let backend = update_backend(&h, false, cx);
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    assert_eq!(backend.checks.load(Ordering::SeqCst), 1);
+    cx.update(|cx| {
+        assert!(matches!(
+            h.dock.read(cx).app_updates.read(cx).state,
+            State::Available(_)
+        ))
+    });
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(matches!(
+            h.dock.read(cx).app_updates.read(cx).state,
+            State::Ready(_)
+        ))
+    });
+    let staged = backend.staged.lock().unwrap().clone().unwrap();
+    assert!(staged.exists());
+    h.click(cx, "discard-app-update");
+    cx.run_until_parked();
+    assert!(!staged.exists());
+    cx.update(|cx| {
+        assert!(matches!(
+            h.dock.read(cx).app_updates.read(cx).state,
+            State::Available(_)
+        ))
+    });
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(matches!(
+            h.dock.read(cx).app_updates.read(cx).state,
+            State::Failed(_)
+        ))
+    });
+    assert_eq!(backend.downloads.load(Ordering::SeqCst), 2);
+    // The app and its settings remain alive after the helper can't start.
+    h.press(cx, "cmd-2");
+    assert_eq!(h.tab(cx), Tab::Dock);
+}
+
+#[gpui_kit::test]
+fn app_update_failures_are_retryable_and_automatic_checks_are_persisted(cx: &mut TestAppContext) {
+    use crate::app::updates::State;
+    let h = open_settings(cx, vec![]);
+    update_backend(&h, true, cx);
+    h.click(cx, "automatic-app-updates");
+    assert!(
+        !h.platform
+            .saved_configs
+            .borrow()
+            .last()
+            .unwrap()
+            .automatically_check_for_updates
+    );
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(matches!(
+            h.dock.read(cx).app_updates.read(cx).state,
+            State::Failed(_)
+        ))
+    });
+    h.click(cx, "app-update-action");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(matches!(
+            h.dock.read(cx).app_updates.read(cx).state,
+            State::Available(_)
+        ))
+    });
+}
+
 #[gpui_kit::test]
 fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
     let h = open_settings(

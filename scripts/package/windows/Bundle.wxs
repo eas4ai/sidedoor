@@ -9,7 +9,9 @@
     <!-- The EXE installs the exact MSI published beside it, using the same
          upgrade/uninstall owner and embedding the entire payload for offline use. -->
     <Chain>
-      <MsiPackage SourceFile="$(var.Msi)" Compressed="yes" Vital="yes" />
+      <MsiPackage SourceFile="$(var.Msi)" Compressed="yes" Vital="yes">
+        <MsiProperty Name="SIDEDOOR_BUNDLE" Value="1" />
+      </MsiPackage>
     </Chain>
   </Bundle>
 </Wix>
