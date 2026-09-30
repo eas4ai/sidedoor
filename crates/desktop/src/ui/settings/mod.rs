@@ -130,6 +130,7 @@ impl SettingsWindow {
             true
         });
         crate::ui::theme::sync_kit_theme(window, cx);
+        dock.update(cx, |dock, cx| dock.refresh_login_item(cx));
         let subscriptions = vec![
             cx.subscribe_in(&city, window, |this, state, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -138,6 +139,11 @@ impl SettingsWindow {
                 }
             }),
             cx.observe(&dock, |_, _, cx| cx.notify()),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.dock.update(cx, |dock, cx| dock.refresh_login_item(cx));
+                }
+            }),
             cx.observe_window_appearance(window, |_, window, cx| {
                 crate::ui::theme::sync_kit_theme(window, cx);
                 cx.notify();

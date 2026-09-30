@@ -287,6 +287,9 @@ pub mod fake {
         pub appearance: RefCell<Option<Appearance>>,
         pub login: RefCell<LoginItem>,
         pub plugins: RefCell<Vec<Manifest>>,
+        /// How often the slow system questions were asked: the login-item
+        /// status and a scan of the plugins folder.
+        pub slow_queries: std::cell::Cell<usize>,
         /// Lets a test speak as each started plugin.
         pub plugin_inbox: RefCell<HashMap<String, UnboundedSender<PluginMessage>>>,
         pub plugin_sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
@@ -420,6 +423,7 @@ pub mod fake {
             *self.appearance.borrow_mut() = Some(appearance);
         }
         fn login_item(&self) -> LoginItem {
+            self.slow_queries.set(self.slow_queries.get() + 1);
             *self.login.borrow()
         }
         fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
@@ -440,6 +444,7 @@ pub mod fake {
             Ok(())
         }
         fn plugins(&self) -> Vec<Manifest> {
+            self.slow_queries.set(self.slow_queries.get() + 1);
             self.plugins.borrow().clone()
         }
         fn start_plugin(

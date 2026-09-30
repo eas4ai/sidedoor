@@ -1057,6 +1057,26 @@ fn settings_tabs_switch_by_click_and_command_number(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn settings_pages_draw_without_asking_the_system(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![ItemConfig::Weather]);
+    let before = h.platform.slow_queries.get();
+    for key in ["cmd-1", "cmd-4", "cmd-1", "cmd-4"] {
+        h.press(cx, key);
+        cx.update_window(h.window, |_, window, cx| {
+            for _ in 0..3 {
+                window.refresh();
+                window.render_frame(cx);
+            }
+        })
+        .unwrap();
+    }
+    // The General page shows the login-item status and the Plugins page
+    // lists the plugins folder; both come from the last check, not from a
+    // system call per frame.
+    assert_eq!(h.platform.slow_queries.get(), before);
+}
+
+#[gpui_kit::test]
 fn builtins_can_be_added_from_plugins_and_removed_like_other_items(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![]);
     h.press(cx, "cmd-4");

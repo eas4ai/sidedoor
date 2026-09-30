@@ -223,6 +223,12 @@ pub struct Dock {
     open_plugin: Option<String>,
     /// Plugins the user agreed to run, by id.
     trusted: BTreeSet<String>,
+    /// Plugins in the plugins folder, as of the last scan. Reading them is
+    /// disk work, so views use this rather than scanning as they draw.
+    discovered: Vec<Manifest>,
+    /// Whether the app opens at login, as of the last check. Asking is a
+    /// round trip to a system service, too slow to do on every frame.
+    login_item: LoginItem,
     /// The install from a link in progress, or why the last one failed.
     pub install: InstallState,
     /// Update checks, by plugin id.
@@ -244,13 +250,9 @@ impl Dock {
         cx: &mut Context<Self>,
     ) -> Self {
         config.migrate_builtins();
+        let discovered = discover_plugins(platform.as_ref());
         let mut manifests = crate::builtins::manifests();
-        manifests.extend(
-            platform
-                .plugins()
-                .into_iter()
-                .filter(|m| !m.id.starts_with("builtin.")),
-        );
+        manifests.extend(discovered.iter().cloned());
         let items = resolve_items(&config.items, platform.as_ref(), &manifests);
         // Plugins already in the dock were agreed to when they were added.
         let mut trusted = std::mem::take(&mut config.trusted_plugins);
@@ -329,6 +331,8 @@ impl Dock {
             plugin_settings: config.plugin_settings,
             open_plugin: None,
             trusted,
+            discovered,
+            login_item: LoginItem::default(),
             install: InstallState::Idle,
             updates: HashMap::new(),
             update_tasks: HashMap::new(),
@@ -919,6 +923,7 @@ impl Dock {
         cx: &mut Context<Self>,
     ) -> Result<Manifest, String> {
         let manifest = self.platform.create_plugin(name)?;
+        self.rescan_plugins();
         if !self.add_plugin(manifest.clone(), cx) {
             return Err("The dock is full. Remove an item to add another.".into());
         }
@@ -926,8 +931,20 @@ impl Dock {
         Ok(manifest)
     }
 
-    /// Reloads plugins whose files changed, as on save.
+    /// Picks up plugins added to or removed from the plugins folder.
+    fn rescan_plugins(&mut self) -> bool {
+        let discovered = discover_plugins(self.platform.as_ref());
+        let changed = discovered != self.discovered;
+        self.discovered = discovered;
+        changed
+    }
+
+    /// Reloads plugins whose files changed, as on save, and notices plugins
+    /// added to or removed from the folder by hand.
     fn poll_plugins(&mut self, cx: &mut Context<Self>) {
+        if self.rescan_plugins() {
+            cx.notify();
+        }
         let changed: Vec<Manifest> = self
             .items
             .iter()
@@ -970,12 +987,7 @@ impl Dock {
     pub fn available_plugins(&self) -> Vec<Manifest> {
         crate::builtins::manifests()
             .into_iter()
-            .chain(
-                self.platform
-                    .plugins()
-                    .into_iter()
-                    .filter(|manifest| !manifest.id.starts_with("builtin.")),
-            )
+            .chain(self.discovered.iter().cloned())
             .filter(|manifest| self.index_of(&format!("plugin:{}", manifest.id)).is_none())
             .collect()
     }
@@ -1024,12 +1036,7 @@ impl Dock {
     pub fn installed_plugins(&self) -> Vec<Manifest> {
         crate::builtins::manifests()
             .into_iter()
-            .chain(
-                self.platform
-                    .plugins()
-                    .into_iter()
-                    .filter(|manifest| !manifest.id.starts_with("builtin.")),
-            )
+            .chain(self.discovered.iter().cloned())
             .map(|manifest| {
                 self.dock_manifest(&manifest.id)
                     .cloned()
@@ -1056,6 +1063,7 @@ impl Dock {
         cx: &mut Context<Self>,
     ) -> Result<Manifest, String> {
         let manifest = self.platform.install_plugin(staged)?;
+        self.rescan_plugins();
         self.trusted.insert(manifest.id.clone());
         self.install = InstallState::Idle;
         self.updates.remove(&manifest.id);
@@ -1128,6 +1136,7 @@ impl Dock {
                 .await;
             let installed = this.update(cx, |this, cx| {
                 let manifest = this.platform.install_plugin(fetched?)?;
+                this.rescan_plugins();
                 if this.in_dock(&manifest.id) {
                     this.replace_plugin(manifest, cx);
                 }
@@ -1164,6 +1173,7 @@ impl Dock {
             .ok_or("The plugin isn't installed anymore.")?;
         self.remove(&format!("plugin:{id}"), cx);
         self.platform.delete_plugin(&manifest)?;
+        self.rescan_plugins();
         self.plugin_settings.remove(id);
         self.trusted.remove(id);
         self.updates.remove(id);
@@ -1214,13 +1224,25 @@ impl Dock {
     }
 
     pub fn login_item(&self) -> LoginItem {
-        self.platform.login_item()
+        self.login_item
+    }
+
+    /// Asks the system again whether the app opens at login, for when
+    /// Settings opens or comes forward: the user may have changed it in
+    /// System Settings meanwhile.
+    pub fn refresh_login_item(&mut self, cx: &mut Context<Self>) {
+        let login_item = self.platform.login_item();
+        if login_item != self.login_item {
+            self.login_item = login_item;
+            cx.notify();
+        }
     }
 
     pub fn set_launch_at_login(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if let Err(err) = self.platform.set_launch_at_login(enabled) {
             eprintln!("sidedoor: couldn't change launch at login: {err}");
         }
+        self.login_item = self.platform.login_item();
         cx.notify();
     }
 
@@ -1631,6 +1653,16 @@ fn push_log(logs: &mut VecDeque<SharedString>, text: &str) {
 }
 
 /// Runs `tick` on the dock every `interval` for as long as the dock exists.
+/// The plugins in the plugins folder, leaving out any that claim a
+/// built-in's id.
+fn discover_plugins(platform: &dyn Host) -> Vec<Manifest> {
+    platform
+        .plugins()
+        .into_iter()
+        .filter(|manifest| !manifest.id.starts_with("builtin."))
+        .collect()
+}
+
 fn every(
     interval: Duration,
     cx: &mut Context<Dock>,
