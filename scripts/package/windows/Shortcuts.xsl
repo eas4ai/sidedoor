@@ -12,7 +12,7 @@
       <xsl:apply-templates select="@*|node()" />
       <Shortcut xmlns="http://schemas.microsoft.com/wix/2006/wi" Id="SidedoorShortcut"
                 Directory="AppMenuFolder" Name="Sidedoor" WorkingDirectory="INSTALLFOLDER"
-                Advertise="yes" Icon="AppIcon" />
+                Advertise="yes" />
     </xsl:copy>
   </xsl:template>
   <xsl:template match="wix:Component[wix:File[@Source='$(var.SourceDir)\Sidedoor.exe']]">
