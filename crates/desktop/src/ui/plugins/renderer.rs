@@ -13,7 +13,11 @@ use gpui_kit::{
     ElementId, Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement, Length, ObjectFit,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled, StyledImage as _,
     Subscription, TestSupportExt as _, Window, auto,
-    base::{Easing, Spring, Transition, spring, transition},
+    base::{
+        Easing, Spring, Transition,
+        slider::{SliderEvent, SliderState},
+        spring, transition,
+    },
     component::{
         chart::{AreaChart, BarChart, LineChart},
         input::{Input, InputEvent, InputState},
@@ -126,6 +130,9 @@ impl Surface {
         let props = animated.as_ref();
         if kind == "Input" {
             return self.input(props, path, window, cx);
+        }
+        if kind == "Slider" {
+            return self.slider(props, path, window, cx);
         }
         let children = self.render(children, path, window, cx);
         let palette = self.palette;
@@ -534,6 +541,47 @@ impl Surface {
         .into_any_element()
     }
 
+    fn slider(&self, props: &Props, path: &str, window: &mut Window, cx: &mut App) -> AnyElement {
+        let palette = self.palette;
+        let key = self.key(props, path);
+        let value = number(props, "value").unwrap_or(0.0).clamp(0.0, 1.0);
+        let slider = window.use_keyed_state(
+            ElementId::Name(format!("{key}:slider").into()),
+            cx,
+            |window, cx| PluginSlider::new(value, window, cx),
+        );
+        let (change, commit) = (handler(props, "on_change"), handler(props, "on_commit"));
+        let target = (self.dock.clone(), self.plugin.clone());
+        slider.update(cx, |slider, cx| {
+            slider.target = Some(target);
+            slider.on_change = change;
+            slider.on_commit = commit;
+            // Only a change the plugin makes moves the knob, and never while
+            // it is held, so a slightly stale `value` doesn't fight the drag.
+            if value != slider.value_prop && !slider.dragging {
+                slider.value_prop = value;
+                slider
+                    .state
+                    .update(cx, |state, cx| state.set_value(value, window, cx));
+            }
+        });
+        let state = slider.read(cx).state.clone();
+        style(
+            div()
+                .id(ElementId::Name(key.into()))
+                .test_support()
+                .w_full()
+                .child(
+                    crate::ui::slider::mac_slider(&state, palette)
+                        .color(color(props.get("color"), palette).unwrap_or(palette.blue))
+                        .disabled(flag(props, "disabled")),
+                ),
+            props,
+            palette,
+        )
+        .into_any_element()
+    }
+
     fn div(&self, props: &Props, path: &str, children: Vec<AnyElement>) -> AnyElement {
         let palette = self.palette;
         let click = handler(props, "on_click");
@@ -542,9 +590,11 @@ impl Surface {
         let active_style = props.get("active").and_then(Value::as_object).cloned();
         let scroll_y = flag(props, "overflow_y_scroll");
         let scroll_x = flag(props, "overflow_x_scroll");
+        let label = string(props, "label").map(|label| SharedString::from(label.to_string()));
         let base = style(div(), props, palette).children(children);
         // An explicit `id` makes the element findable and keeps its state.
         if !props.contains_key("id")
+            && label.is_none()
             && click.is_none()
             && hover.is_none()
             && hover_style.is_none()
@@ -560,6 +610,8 @@ impl Surface {
         let element = base
             .id(self.id(props, path))
             .test_support()
+            // Names an icon-only control for VoiceOver.
+            .when_some(label, |el, label| el.aria_label(label))
             .when(scroll_y, |el| el.overflow_y_scroll())
             .when(scroll_x, |el| el.overflow_x_scroll())
             .when_some(hover_style, |el, hovered| {
@@ -893,6 +945,60 @@ impl PluginInput {
             on_change: None,
             on_submit: None,
             value_prop: None,
+            _subscription: subscription,
+        }
+    }
+}
+
+/// A plugin's slider: its knob position lives here, across renders, and
+/// every move and release goes to the plugin's handlers.
+struct PluginSlider {
+    state: Entity<SliderState>,
+    target: Option<(Entity<Dock>, SharedString)>,
+    on_change: Option<SharedString>,
+    on_commit: Option<SharedString>,
+    /// The `value` prop as last rendered.
+    value_prop: f32,
+    /// Between the press and the release.
+    dragging: bool,
+    _subscription: Subscription,
+}
+
+impl PluginSlider {
+    fn new(value: f32, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.0001)
+                .default_value(value)
+        });
+        let subscription =
+            cx.subscribe_in(&state, window, |this, _, event: &SliderEvent, _, cx| {
+                let (handler, value) = match event {
+                    SliderEvent::Change(value) => {
+                        this.dragging = true;
+                        (this.on_change.clone(), value.end())
+                    }
+                    SliderEvent::Release(value) => {
+                        this.dragging = false;
+                        (this.on_commit.clone(), value.end())
+                    }
+                };
+                // Four places are finer than a pixel on any slider, and keep
+                // f32 noise out of what the plugin receives.
+                let value = (f64::from(value) * 10_000.0).round() / 10_000.0;
+                if let (Some(handler), Some((dock, plugin))) = (handler, this.target.clone()) {
+                    send(&dock, &plugin, &handler, Value::from(value), cx);
+                }
+            });
+        Self {
+            state,
+            target: None,
+            on_change: None,
+            on_commit: None,
+            value_prop: value,
+            dragging: false,
             _subscription: subscription,
         }
     }

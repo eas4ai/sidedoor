@@ -7,6 +7,7 @@ pub(crate) mod plugins;
 pub(crate) mod remote_image;
 pub(crate) mod settings;
 pub(crate) mod shortcut_recorder;
+pub(crate) mod slider;
 pub(crate) mod switch;
 #[cfg(test)]
 mod tests;

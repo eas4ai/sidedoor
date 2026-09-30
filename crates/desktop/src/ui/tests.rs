@@ -1406,7 +1406,10 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
                 { "t": "Button", "p": { "id": "add", "label": "Add", "variant": "primary",
                                         "on_click": { "$h": "card:W/add#on_click" } }, "c": [] },
                 { "t": "Switch", "p": { "id": "sound", "checked": false,
-                                        "on_change": { "$h": "card:W/sound#on_change" } }, "c": [] }
+                                        "on_change": { "$h": "card:W/sound#on_change" } }, "c": [] },
+                { "t": "div", "p": { "id": "play", "label": "Play",
+                                     "on_click": { "$h": "card:W/play#on_click" } },
+                  "c": [{ "t": "Icon", "p": { "name": "play" }, "c": [] }] }
             ]}]),
         ),
     );
@@ -1418,6 +1421,8 @@ fn plugins_draw_native_components_with_custom_styles(cx: &mut TestAppContext) {
         // Custom styles land as written.
         let size = window.find("plugin:counter:box").bounds().size;
         assert_eq!((size.width, size.height), (px(120.0), px(30.0)));
+        // An icon-only control is named for VoiceOver by its `label`.
+        assert_eq!(window.find("plugin:counter:play").label(), Some("Play"));
         window.click("plugin:counter:add", cx);
         window.click("plugin:counter:box", cx);
         window.click("plugin:counter:sound", cx);
@@ -1582,6 +1587,75 @@ fn plugin_patches_update_the_tree_and_mismatches_resync(cx: &mut TestAppContext)
         },
     );
     assert_eq!(sent(&h, "counter").last(), Some(&HostMessage::Resync));
+}
+
+#[gpui_kit::test]
+fn plugin_sliders_jump_drag_and_commit_on_release(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![ItemConfig::Plugin {
+            id: "counter".into(),
+        }],
+    );
+    let tree = |value: f64| {
+        render(
+            "card",
+            serde_json::json!([{ "t": "Slider", "p": {
+                "id": "seek", "w": 200, "value": value,
+                "on_change": { "$h": "change" }, "on_commit": { "$h": "commit" }
+            }, "c": [] }]),
+        )
+    };
+    plugin_says(&h, cx, "counter", tree(0.25));
+    open_plugin_card(&h, cx, "plugin:counter");
+
+    // A click on the track jumps there. The knob's travel stops half a knob
+    // short of each end, so the middle of the control is 0.5.
+    cx.update_window(h.card_window, |_, window, cx| {
+        assert_eq!(
+            window.find("plugin:counter:seek").bounds().size.width,
+            px(200.0)
+        );
+        window.click_at("plugin:counter:seek", point(px(100.0), px(8.0)), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        events(&h, "counter"),
+        vec![
+            ("change".to_string(), serde_json::Value::from(0.5)),
+            ("commit".to_string(), serde_json::Value::from(0.5)),
+        ]
+    );
+
+    // Dragging reports each move and commits once, where it was let go;
+    // past the end it stops at 1.
+    plugin_says(&h, cx, "counter", tree(0.5));
+    h.platform.plugin_sent.borrow_mut().clear();
+    cx.update_window(h.card_window, |_, window, cx| {
+        let bounds = window.find("plugin:counter:seek").bounds();
+        let y = bounds.center().y;
+        window.drag(
+            point(bounds.left() + px(100.0), y),
+            point(bounds.right() + px(40.0), y),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let got = events(&h, "counter");
+    let (commits, changes): (Vec<_>, Vec<_>) =
+        got.iter().partition(|(handler, _)| handler == "commit");
+    assert!(changes.len() > 1, "{got:?}");
+    assert_eq!(
+        changes.last().unwrap().1,
+        serde_json::Value::from(1.0),
+        "{got:?}"
+    );
+    assert_eq!(
+        commits,
+        vec![&("commit".to_string(), serde_json::Value::from(1.0))]
+    );
 }
 
 #[gpui_kit::test]

@@ -57,7 +57,7 @@ in deeper components, or with `sidedoor.settings()` outside render.
 
 | Element | Props |
 | --- | --- |
-| `div` | style props, `id`, `on_click`, `on_hover(hovered)`, `hover={{…}}`, `active={{…}}`, `enter={{ kind: "rise" \| "pop", duration, delay }}`, `bg_gradient={{ from, to, angle }}`, `magnify` (tile hover scaling) |
+| `div` | style props, `id`, `label` (VoiceOver and tests; give icon-only buttons one), `on_click`, `on_hover(hovered)`, `hover={{…}}`, `active={{…}}`, `enter={{ kind: "rise" \| "pop", duration, delay }}`, `bg_gradient={{ from, to, angle }}`, `magnify` (tile hover scaling) |
 | `svg` | `path` (Lucide name), style props |
 | `img` | `src` (absolute path or `https://` URL, cached 1 h, max 10 MB), `object_fit` (`contain`, `cover`, `fill`), style props |
 
@@ -72,6 +72,7 @@ in deeper components, or with `sidedoor.settings()` outside render.
 | `Input` | `id` (required), `value`, `placeholder`, `secret`, `icon`, `on_change(text)`, `on_submit(text)` |
 | `Switch` | `checked`, `on_change(checked)`, `disabled` |
 | `Segmented` | `options`, `selected`, `on_change(index)` |
+| `Slider` | `value` (0–1), `on_change(value)` while moving, `on_commit(value)` once on release, `disabled`, `color` (`accent` default); click jumps, drag moves |
 | `Meter` | `label`, `fraction` (0–1), `value`, `icon`, `color`, `animated`, `value_number`, `value_suffix` |
 | `ListRow` | `title`, `subtitle`, `icon`, `accessory`, `on_click` |
 | `Sparkline` | `values` (0–1 each), `color` |
@@ -115,7 +116,7 @@ numeric style props (size, spacing, position, `opacity`, `rounded`,
 | --- | --- |
 | `useState`, `useEffect`, `useRef`, `useMemo` | As in React |
 | `useInterval(fn, ms \| null)` | Repeating timer; `null` pauses it |
-| `createStore(initial)` | Shared state: `.use()` in render, `.set(value \| fn)` anywhere |
+| `createStore(initial)` | Shared state: `.use()` in render, `.get()` in handlers and async code, `.set(value \| fn)` anywhere |
 | `useStorage(key, initial)` | Persistent JSON state, shared by key across components |
 | `useSetting(key)` | One setting's typed value |
 | `useCardOpen()` | Whether the card is showing |
@@ -161,13 +162,15 @@ const plugin = mount(definition, { settings?, storage? });
 | --- | --- |
 | `card`, `tile`, `window(key)` | Rendered trees |
 | `text(surface?)` | Text of `"card"`, `"tile"` or `"window:<key>"` |
-| `find(label \| match)` | Element by `label`/`title` prop or text, with `.click()`, `.change(v)`, `.submit(text)` |
+| `find(label \| match)` | Element by `label`/`title` prop or text, with `.click()`, `.change(v)`, `.submit(text)`; on a `Slider`, `.change(v)` also calls `on_commit` |
 | `findAll(type)` | Every element of a type, e.g. `"Button"` |
 | `press(label, surface?)` | Click the clickable element with that label |
 | `click()`, `action(key)`, `setCardOpen(open)`, `setSettings(values)` | What the dock and Settings send |
 | `closeWindow(key)` | Window close button |
 | `notifications`, `storage`, `sent` | What the plugin asked for |
-| `settle()`, `unmount()` | Wait for renders and effects; stop timers |
+| `settle()` | Wait until idle: loops while re-renders and effects keep coming (a fetch → `store.set` → re-render finishes in one call), up to 100 rounds |
+| `waitFor(check, { timeout?, interval? })` | Retry `check` until it stops throwing, settling between tries; throws its last error after `timeout` (1000 ms) |
+| `unmount()` | Stop timers |
 
 A plugin that throws fails the test. Use `setSystemTime` from `bun:test` for
 time-based logic.

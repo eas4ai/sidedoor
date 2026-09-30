@@ -2,10 +2,15 @@ import { afterEach, expect, test } from "bun:test";
 import {
   Button,
   Card,
+  Icon,
   Input,
+  Slider,
+  Text,
   createStore,
   definePlugin,
   sidedoor,
+  useEffect,
+  useInterval,
   useState,
   useStorage,
 } from "@sidedoor/sdk";
@@ -151,4 +156,106 @@ test("windows render only while open", async () => {
   expect(plugin.sent.find((message) => message.type === "manifest")).toMatchObject({
     windows: [{ key: "all", title: "All Notes", width: 520, height: 360 }],
   });
+});
+
+test("icon-only controls are found and pressed by their label", async () => {
+  const player = definePlugin({
+    name: "Player",
+    card() {
+      const [playing, setPlaying] = useState(false);
+      return (
+        <div flex gap={8}>
+          <div label={playing ? "Pause" : "Play"} on_click={() => setPlaying(!playing)}>
+            <Icon name={playing ? "pause" : "play"} />
+          </div>
+        </div>
+      );
+    },
+  });
+  const plugin = mount(player);
+  expect(plugin.find("Play").type).toBe("div");
+  await plugin.press("Play");
+  expect(plugin.find("Pause").children).toEqual([
+    { t: "Icon", p: { name: "pause" }, c: [] },
+  ]);
+});
+
+test("change drags a slider and commits where it was let go", async () => {
+  const commits: number[] = [];
+  const volume = definePlugin({
+    name: "Volume",
+    card() {
+      const [level, setLevel] = useState(0.2);
+      return (
+        <div>
+          <Slider id="volume" value={level} on_change={setLevel} on_commit={(v) => commits.push(v)} />
+          <Text>{`${Math.round(level * 100)}%`}</Text>
+        </div>
+      );
+    },
+  });
+  const plugin = mount(volume);
+  const slider = plugin.find((element) => element.type === "Slider");
+  expect(slider.props.value).toBe(0.2);
+  await slider.change(0.75);
+  expect(plugin.text()).toBe("75%");
+  expect(plugin.find((element) => element.type === "Slider").props.value).toBe(0.75);
+  expect(commits).toEqual([0.75]);
+});
+
+test("one settle waits out a chain of renders across ticks", async () => {
+  const steps = createStore(0);
+  const chain = definePlugin({
+    name: "Chain",
+    card() {
+      const step = steps.use();
+      // Each step lands a tick after the render before it, as a fetch would.
+      useEffect(() => {
+        if (step < 5) setTimeout(() => steps.set(step + 1), 0);
+      }, [step]);
+      return <Text>{`Step ${step}`}</Text>;
+    },
+  });
+  const plugin = mount(chain);
+  await plugin.settle();
+  expect(plugin.text()).toBe("Step 5");
+});
+
+test("settle gives up on a plugin that never stops re-rendering", async () => {
+  const busy = definePlugin({
+    name: "Busy",
+    card() {
+      const [count, setCount] = useState(0);
+      useInterval(() => setCount(count + 1), 0);
+      return <Text>{count}</Text>;
+    },
+  });
+  const plugin = mount(busy);
+  await plugin.settle();
+  expect(Number(plugin.text())).toBeGreaterThan(0);
+  plugin.unmount();
+});
+
+test("waitFor retries until the check passes, or throws its last error", async () => {
+  const slow = definePlugin({
+    name: "Slow",
+    card() {
+      const [loaded, setLoaded] = useState(false);
+      useEffect(() => {
+        const timer = setTimeout(() => setLoaded(true), 40);
+        return () => clearTimeout(timer);
+      }, []);
+      return <Text>{loaded ? "Loaded" : "Loading"}</Text>;
+    },
+  });
+  const plugin = mount(slow);
+  expect(plugin.text()).toBe("Loading");
+  const text = await plugin.waitFor(() => {
+    expect(plugin.text()).toBe("Loaded");
+    return plugin.text();
+  });
+  expect(text).toBe("Loaded");
+  await expect(
+    plugin.waitFor(() => expect(plugin.text()).toBe("Never"), { timeout: 30 }),
+  ).rejects.toThrow();
 });

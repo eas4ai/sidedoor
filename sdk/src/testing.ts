@@ -12,7 +12,7 @@
 //   });
 
 import { start, type HostMessage, type PluginDefinition, type PluginMessage } from "./host";
-import { invalidate, reset, type Patch } from "./runtime";
+import { activity, invalidate, reset, type Patch } from "./runtime";
 import { createStorage, type Storage } from "./storage";
 import type { Node } from "./types";
 
@@ -32,7 +32,10 @@ export interface Found {
   text(): string;
   /** Calls its `on_click`. */
   click(): Promise<void>;
-  /** Calls `on_change`, as typing, switching or picking would. */
+  /**
+   * Calls `on_change`, as typing, switching or picking would. On a `Slider`
+   * it then calls `on_commit` with the same value, as letting go would.
+   */
   change(value: unknown): Promise<void>;
   /** Calls `on_submit`, as Return in an `Input` would. */
   submit(value: string): Promise<void>;
@@ -41,8 +44,17 @@ export interface Found {
 /** `"card"`, `"tile"` or `"window:<key>"`. */
 type Surface = "card" | "tile" | `window:${string}`;
 
-/** Lets the plugin re-render and run its effects. */
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+export interface WaitForOptions {
+  /** Milliseconds before giving up with the last error; 1000 by default. */
+  timeout?: number;
+  /** Milliseconds between tries; 10 by default. */
+  interval?: number;
+}
+
+/** Rounds `settle` waits at most, so a plugin that never stops re-rendering can't hang a test. */
+const SETTLE_ROUNDS = 100;
+
+const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function textOf(nodes: Node[]): string {
   return nodes
@@ -116,11 +128,31 @@ export function mount(definition: PluginDefinition<any>, options: MountOptions =
     { settings: options.settings ?? {}, storage },
   );
 
+  /**
+   * Waits a macrotask at a time until two pass in a row with no render, no
+   * message and nothing scheduled, so a chain such as a fetch, then
+   * `store.set`, then a re-render and its effects, finishes.
+   */
+  const settle = async () => {
+    let quiet = 0;
+    for (let round = 0; round < SETTLE_ROUNDS && quiet < 2; round++) {
+      const [renders, messages] = [activity().renders, sent.length];
+      await tick();
+      const now = activity();
+      const idle = now.renders === renders && sent.length === messages && !now.pending;
+      quiet = idle ? quiet + 1 : 0;
+    }
+  };
+
+  const failure = () => {
+    const error = sent.find((message) => message.type === "error");
+    if (error) throw new Error(`The plugin failed: ${error.message}`);
+  };
+
   const deliver = async (message: HostMessage) => {
     receive(message);
     await settle();
-    const error = sent.find((message) => message.type === "error");
-    if (error) throw new Error(`The plugin failed: ${error.message}`);
+    failure();
   };
 
   const handler = (node: Exclude<Node, string>, prop: string) => {
@@ -137,7 +169,12 @@ export function mount(definition: PluginDefinition<any>, options: MountOptions =
     children: node.c,
     text: () => textOf(node.c),
     click: () => deliver({ type: "event", handler: handler(node, "on_click") }),
-    change: (value) => deliver({ type: "event", handler: handler(node, "on_change"), value }),
+    async change(value) {
+      await deliver({ type: "event", handler: handler(node, "on_change"), value });
+      if (node.t === "Slider" && node.p.on_commit) {
+        await deliver({ type: "event", handler: handler(node, "on_commit"), value });
+      }
+    },
     submit: (value) => deliver({ type: "event", handler: handler(node, "on_submit"), value }),
   });
 
@@ -222,8 +259,32 @@ export function mount(definition: PluginDefinition<any>, options: MountOptions =
       deliver({ type: "data", source, value }),
     /** Changes settings as Settings › Plugins would. */
     setSettings: (values: Record<string, unknown>) => deliver({ type: "settings", values }),
-    /** Waits for re-renders and effects, e.g. after a timer fires. */
+    /**
+     * Waits until the plugin is idle: no re-render or effect pending, and
+     * two macrotasks passed with nothing new. Promise chains that span several
+     * ticks finish too; for work on a timer, use `waitFor`.
+     */
     settle,
+    /**
+     * Retries `check` until it stops throwing and returns what it returned,
+     * settling between tries. After `timeout` it throws the last error.
+     */
+    async waitFor<T>(
+      check: () => T | Promise<T>,
+      { timeout = 1000, interval = 10 }: WaitForOptions = {},
+    ): Promise<T> {
+      const deadline = Date.now() + timeout;
+      for (;;) {
+        await settle();
+        failure();
+        try {
+          return await check();
+        } catch (error) {
+          if (Date.now() >= deadline) throw error;
+        }
+        await tick(interval);
+      }
+    },
     /** Stops timers and effects. */
     unmount: reset,
   };

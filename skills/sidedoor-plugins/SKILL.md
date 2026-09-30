@@ -79,7 +79,8 @@ Rules that aren't obvious from React experience:
 - **GPUI names, not HTML or CSS.** The only elements are `div`, `svg` and
   `img`. Style with boolean or value props named after GPUI's `Styled`
   methods, in snake_case: `<div flex flex_col gap={8} px={12} text_color="secondary">`.
-  Events are `on_click`, `on_change` and `on_submit`. There's no
+  Events are `on_click`, `on_hover`, `on_change`, `on_submit` and (on
+  `Slider`) `on_commit`. There's no
   `className`, `style` or `onClick`. Numbers are points.
 - **Prefer native components** (`Card`, `Text`, `Button`, `ListRow`,
   `Meter`, `Chart`, …) so the widget matches the built-ins. Style props on
@@ -92,7 +93,8 @@ Rules that aren't obvious from React experience:
   in one of them only. Pause work with `useInterval(fn, null)` and use
   `useCardOpen()` to refresh data when the card opens.
 - **State:** `useState` is per component. `createStore(initial)` shares state
-  between tile, card and windows (`.use()` in render, `.set()` anywhere).
+  between tile, card and windows (`.use()` in render, `.get()` in handlers
+  and async code, `.set()` anywhere).
   `useStorage(key, initial)` persists JSON across reloads and restarts.
   Outside render, use `sidedoor.storage.get/set/delete`.
 - **Windows** (`windows: { key: { title, render } }`, opened with
@@ -101,6 +103,10 @@ Rules that aren't obvious from React experience:
 - **Native data:** declare `data: ["weather" | "stats" | "clipboard"]` and
   read it with `useData(name)`, which is `null` until the first update.
 - **`Input` needs an `id`.** Give list items a `key`.
+- **Seek bars and volume:** use `Slider` (`value` 0–1, `on_change` while
+  dragging, `on_commit` on release). Send costly commands from `on_commit`.
+- **Icon-only buttons:** give the clickable `div` a `label` (`label="Play"`)
+  so VoiceOver reads it and tests can `press("Play")`.
 - **Everything else is plain Bun:** `fetch`, `Bun.file`, timers. Find your
   own files with `import.meta.dir`, since the working directory is shared.
   Write files to `sidedoor.dataDir`.
@@ -136,8 +142,20 @@ test("Add counts by the step", async () => {
 });
 ```
 
-For typechecking tests, add `"types": ["bun"]` to `tsconfig.json` and run
-`bun add -d @types/bun`. The `mount` API is summarized in
+For typechecking tests, give the plugin Bun's types from its folder:
+
+```bash
+echo '{ "private": true }' > package.json
+bun add -d @types/bun
+```
+
+Then add `"types": ["bun"]` to `compilerOptions` in `tsconfig.json`.
+TypeScript 7 includes no `@types` package unless `types` lists it, and the
+linked SDK doesn't provide Bun's types. Create `package.json` first: without
+it, `bun add` installs into the nearest parent folder with one (often the
+home folder), and `tsc` then passes only by accident. Use `plugin.waitFor(fn)`
+for timer or slow async work, and `plugin.settle()` otherwise. The `mount`
+API is summarized in
 [references/api.md](references/api.md#testing).
 
 ## 5. Run it in the app

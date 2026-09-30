@@ -181,9 +181,12 @@ GPUI's elements, in lowercase:
 
 | Element | Props |
 | --- | --- |
-| `div` | style props, `id`, `on_click`, `on_hover(hovered)`, `hover={{…}}`, `active={{…}}` |
+| `div` | style props, `id`, `label`, `on_click`, `on_hover(hovered)`, `hover={{…}}`, `active={{…}}` |
 | `svg` | `path` (a Lucide name), style props |
 | `img` | `src` (an absolute file path or an `https://` URL), `object_fit` (`contain`, `cover` or `fill`), style props |
+
+Give a clickable `div` that shows only an icon a `label`, such as
+`label="Play"`. VoiceOver reads it, and tests find and press it by it.
 
 ## Native components
 
@@ -199,6 +202,7 @@ widgets. They also take style props, which are applied on top.
 | `Input` | `id` (required), `value`, `placeholder`, `secret`, `icon`, `on_change(text)`, `on_submit(text)` |
 | `Switch` | `checked`, `on_change(checked)`, `disabled` |
 | `Segmented` | `options`, `selected`, `on_change(index)` |
+| `Slider` | `value` (0–1), `on_change(value)` as it moves, `on_commit(value)` once on release, `disabled`, `color` (`accent` by default). Click to jump, or drag |
 | `Meter` | `label`, `fraction` (0–1), `value`, `icon`, `color` |
 | `ListRow` | `title`, `subtitle`, `icon`, `accessory`, `on_click` |
 | `Sparkline` | `values` (0–1 each), `color` |
@@ -273,7 +277,19 @@ and the widget re-renders when they change. Deeper components can use
 `useState`, `useEffect`, `useRef`, `useMemo` and `useInterval(fn, ms | null)`
 work as they do in React. To share state between the tile and the card, use
 `createStore(initial)`: read it with `.use()` during render and change it with
-`.set(value | fn)`.
+`.set(value | fn)`. Outside render, in event handlers and async code, read it
+with `.get()`. Unlike `.use()`, it doesn't re-render anything.
+
+```tsx
+const player = createStore({ playing: false, position: 0 });
+
+async function toggle() {
+  // `.get()` is the latest value, even after an `await`.
+  const { playing } = player.get();
+  await fetch(playing ? PAUSE_URL : PLAY_URL, { method: "PUT" });
+  player.set((state) => ({ ...state, playing: !playing }));
+}
+```
 
 `useStorage(key, initial)` works like `useState`, but the value is saved in
 the plugin's data folder, so it survives reloads and restarts, and every
@@ -327,11 +343,41 @@ test("the tile starts the timer", async () => {
   what the dock and Settings would send.
 - `notifications`, `storage` and `sent`: what the plugin asked for. Storage
   stays in memory.
-- `settle()` waits for re-renders and effects; `unmount()` stops timers.
+- `settle()` waits until the plugin is idle: it keeps waiting while
+  re-renders and effects follow one another, so a fetch, then a
+  `store.set`, then a re-render finishes in one call. It gives up after 100
+  rounds, so a plugin that never stops re-rendering can't hang the test.
+  Every `click`, `press`, `change` and the like settles on its own.
+- `waitFor(check, { timeout?, interval? })` retries `check` until it stops
+  throwing, settling between tries, and returns what it returned. After
+  `timeout` (1000 ms by default) it throws the last error. Use it for work on
+  a timer or a slow promise:
 
-A plugin that throws fails the test. To typecheck tests, add
-`"types": ["bun"]` to the plugin's `tsconfig.json` and install
-`@types/bun`. See `examples/plugins/pomodoro/index.test.tsx`.
+  ```tsx
+  await plugin.waitFor(() => expect(plugin.text()).toContain("Now Playing"));
+  ```
+- `unmount()` stops timers.
+
+On a `Slider`, `change(value)` calls `on_change` and then `on_commit`, as a
+click would.
+
+A plugin that throws fails the test.
+
+To typecheck tests, give the plugin Bun's types. Run these in the plugin
+folder:
+
+```sh
+echo '{ "private": true }' > package.json
+bun add -d @types/bun
+```
+
+Then add `"types": ["bun"]` to `compilerOptions` in its `tsconfig.json`.
+TypeScript 7 includes no `@types` package unless `types` lists it, and the
+linked SDK doesn't bring Bun's types. Create the `package.json` first:
+without one, `bun add` installs into the nearest parent folder that has one,
+such as your home folder. A `package.json` with only `devDependencies` is
+safe to share: installing a plugin only installs its `dependencies`. See
+`examples/plugins/pomodoro/index.test.tsx`.
 
 ## Protocol
 

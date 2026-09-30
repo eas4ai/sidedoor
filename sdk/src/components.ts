@@ -15,6 +15,7 @@ import type {
   MeterProps,
   NumberTextProps,
   SegmentedProps,
+  SliderProps,
   SpacerProps,
   SparklineProps,
   ChartProps,
@@ -45,6 +46,11 @@ export const Button = native<ButtonProps>("Button");
 export const Switch = native<SwitchProps>("Switch");
 /** A segmented control, as in the Clipboard History filters. */
 export const Segmented = native<SegmentedProps>("Segmented");
+/**
+ * A slider from 0 to 1, for seeking and volume. Click to jump, or drag;
+ * `on_commit` fires once on release.
+ */
+export const Slider = native<SliderProps>("Slider");
 /** A labelled gauge, as in the Stats card. */
 export const NumberText = native<NumberTextProps>("NumberText");
 export const Meter = native<MeterProps>("Meter");

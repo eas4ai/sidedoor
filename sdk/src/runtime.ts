@@ -48,6 +48,8 @@ let scheduled = false;
 /** Every store, in creation order, for snapshots. */
 const stores: Array<{ get(): unknown; restore(value: unknown): void }> = [];
 let restoring: Snapshot | null = null;
+/** How many times surfaces have rendered; tests watch it to know when things settle. */
+let renders = 0;
 
 /** Called whenever state changes; the host bridge re-renders in response. */
 export function setInvalidateHandler(handler: () => void) {
@@ -165,6 +167,7 @@ export function createStore<T>(initial: T) {
     },
   });
   return {
+    /** Reads the value outside render, e.g. in an event handler or async code. */
     get: () => value,
     set(next: T | ((previous: T) => T)) {
       const updated =
@@ -259,6 +262,7 @@ export function renderSurfaces(
   surfaces: Record<string, Component<any>>,
   props: Record<string, unknown> = {},
 ): Record<string, Node[]> {
+  renders++;
   seen = new Set();
   handlers = new Map();
   const output: Record<string, Node[]> = {};
@@ -288,6 +292,11 @@ export function dispatch(key: string, value: unknown): boolean {
   if (!handler) return false;
   handler(value);
   return true;
+}
+
+/** Renders so far, and whether a re-render or effects are waiting to run; for tests. */
+export function activity(): { renders: number; pending: boolean } {
+  return { renders, pending: scheduled || pendingEffects.length > 0 };
 }
 
 /** Forgets every instance; for tests. */

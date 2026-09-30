@@ -257,7 +257,8 @@ test("a session that ends sends a banner and resets", async () => {
   const plugin = mount(pomodoro, { storage: { timer: { minutes: 15, left: 900, endsAt: null } } });
   await plugin.press("Start");
   setSystemTime(new Date("2026-09-29T09:15:01Z"));
-  await new Promise((resolve) => setTimeout(resolve, 1100));
+  // The timer ticks once a second; wait for the tick that ends the session.
+  await plugin.waitFor(() => expect(plugin.notifications).toHaveLength(1), { timeout: 2000 });
   expect(plugin.notifications).toEqual([
     { title: "Time's up", body: "15 minutes of focus done. Take a break." },
   ]);
@@ -288,6 +289,10 @@ test("the history window adds up finished sessions", async () => {
 ```
 
 ## tsconfig.json
+
+The app writes this file without `types`. `"types": ["bun"]` is added here
+so `tsc` checks the test too, which needs Bun's types in the plugin folder:
+`echo '{ "private": true }' > package.json && bun add -d @types/bun`.
 
 ```json
 {

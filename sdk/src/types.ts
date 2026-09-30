@@ -161,6 +161,12 @@ export interface StyleProps {
 export interface EventProps {
   /** A stable identity among siblings, like GPUI's `ElementId`. */
   id?: string | number;
+  /**
+   * What VoiceOver reads for the element, and what `find` and `press` match
+   * in tests. Give one to icon-only controls. A `Button`'s label is also its
+   * text.
+   */
+  label?: string;
   on_click?: () => void;
   on_hover?: (hovered: boolean) => void;
 }
@@ -226,6 +232,22 @@ export interface SegmentedProps extends StyleProps {
   options: string[];
   selected: number;
   on_change: (index: number) => void;
+}
+
+export interface SliderProps extends StyleProps {
+  id?: string | number;
+  /** 0 to 1. */
+  value: number;
+  /** The knob moved, by a click on the track or a drag; 0 to 1. */
+  on_change: (value: number) => void;
+  /**
+   * The pointer let go, with the final value. Act here on what is costly to
+   * repeat, such as a seek, and use `on_change` to move the knob.
+   */
+  on_commit?: (value: number) => void;
+  disabled?: boolean;
+  /** The filled part of the track; `accent` by default. */
+  color?: Color;
 }
 
 export interface NumberTextProps extends StyleProps {
