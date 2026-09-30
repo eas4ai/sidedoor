@@ -1,7 +1,7 @@
-param([string]$App = "$PSScriptRoot/../../target/windows-bundle/Sidedoor")
+param([string]$App = "$PSScriptRoot/../../target/windows-bundle/Sidedoor", [string]$Log = "")
 $ErrorActionPreference = "Stop"
 $App = (Resolve-Path $App).Path
-$Log = Join-Path (Split-Path $App) "smoke"
+if (-not $Log) { $Log = Join-Path (Split-Path $App) "smoke" }
 # A restored build cache must not supply stale screenshots or a previous profile.
 if (Test-Path $Log) { Remove-Item -Recurse -Force $Log }
 New-Item -ItemType Directory -Force $Log | Out-Null

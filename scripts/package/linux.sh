@@ -3,6 +3,7 @@
 #
 #   scripts/package/linux.sh            build Sidedoor-linux-<arch>.tar.gz
 #   scripts/package/linux.sh --install  also install it for this user and start it
+#   scripts/package/linux.sh --packages also build DEB and RPM installers
 #
 # The folder holds the executable, Bun, the SDK and the built-in plugins,
 # so it runs without a checkout or a system Bun installation. Installing
@@ -59,7 +60,12 @@ StartupNotify=false
 DESKTOP
 
 tar -C "$OUT" -czf "$OUT/$NAME-linux-$ARCH.tar.gz" "$NAME-linux-$ARCH"
+(cd "$OUT" && sha256sum "$NAME-linux-$ARCH.tar.gz" > "$NAME-linux-$ARCH.tar.gz.sha256")
 echo "Built $DIR and $OUT/$NAME-linux-$ARCH.tar.gz ($VERSION)"
+
+if [ "${1:-}" = "--packages" ]; then
+    SIDEDOOR_VERSION="$VERSION" ./scripts/package/linux-installers.sh
+fi
 
 if [ "${1:-}" = "--install" ]; then
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}"

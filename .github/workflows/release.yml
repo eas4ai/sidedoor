@@ -63,9 +63,8 @@ jobs:
           brew install librsvg
           SIDEDOOR_VERSION="${TAG#v}" ./scripts/package/macos.sh
           cd target/release/bundle
-          ditto -c -k --keepParent Sidedoor.app Sidedoor-macos-arm64.zip
-          shasum -a 256 Sidedoor-macos-arm64.zip > Sidedoor-macos-arm64.zip.sha256
-          gh release upload "$TAG" Sidedoor-macos-arm64.zip Sidedoor-macos-arm64.zip.sha256 --clobber
+          shasum -a 256 -c Sidedoor-macos-arm64.zip.sha256 Sidedoor-macos-arm64.dmg.sha256
+          gh release upload "$TAG" Sidedoor-macos-arm64.{zip,dmg} Sidedoor-macos-arm64.{zip,dmg}.sha256 --clobber
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -73,19 +72,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev
-          SIDEDOOR_VERSION="${TAG#v}" ./scripts/package/linux.sh
+            libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev \
+            dpkg-dev rpm desktop-file-utils cpio
+          SIDEDOOR_VERSION="${TAG#v}" ./scripts/package/linux.sh --packages
+          ./scripts/smoke/linux-installers.sh
           cd target/release/bundle
-          sha256sum Sidedoor-linux-x86_64.tar.gz > Sidedoor-linux-x86_64.tar.gz.sha256
-          gh release upload "$TAG" Sidedoor-linux-x86_64.tar.gz Sidedoor-linux-x86_64.tar.gz.sha256 --clobber
+          sha256sum -c Sidedoor-linux-x86_64.{tar.gz,deb,rpm}.sha256
+          gh release upload "$TAG" Sidedoor-linux-x86_64.{tar.gz,deb,rpm} Sidedoor-linux-x86_64.{tar.gz,deb,rpm}.sha256 --clobber
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          ./scripts/package/windows.ps1
+          $env:SIDEDOOR_VERSION = $env:TAG -replace '^v', ''
+          ./scripts/package/windows.ps1 -Installers
+          ./scripts/smoke/windows-installers.ps1
           Set-Location target/windows-bundle
-          gh release upload "$env:TAG" Sidedoor-windows-x64.zip Sidedoor-windows-x64.zip.sha256 --clobber
+          gh release upload "$env:TAG" Sidedoor-windows-x64.zip Sidedoor-windows-x64.zip.sha256 Sidedoor-windows-x64.msi Sidedoor-windows-x64.msi.sha256 Sidedoor-windows-x64-setup.exe Sidedoor-windows-x64-setup.exe.sha256 --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   publish:

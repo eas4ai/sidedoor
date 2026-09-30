@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds "Sidedoor.app" into target/release/bundle.
+# Builds Sidedoor.app, a portable ZIP, and a drag-to-install DMG.
 #
 #   scripts/package/macos.sh            build the bundle
 #   scripts/package/macos.sh --install  also copy it to /Applications and open it
@@ -105,6 +105,8 @@ codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --strict "$APP"
 
 echo "Built $APP ($VERSION, build $BUILD)"
+
+./scripts/package/macos-artifacts.sh
 
 if [ "${1:-}" = "--install" ]; then
     DEST="/Applications/$NAME.app"

@@ -1,4 +1,4 @@
-param([switch]$SkipBuild)
+param([switch]$SkipBuild, [switch]$Installers)
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -38,6 +38,7 @@ try {
     $Hash = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLowerInvariant()
     Set-Content -Encoding ascii "$Zip.sha256" "$Hash  Sidedoor-windows-x64.zip"
     Write-Host "Built $Zip"
+    if ($Installers) { & "$PSScriptRoot/windows-installers.ps1" }
 } finally {
     $env:RUSTFLAGS = $PreviousRustFlags
     Pop-Location

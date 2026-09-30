@@ -44,7 +44,9 @@ jobs:
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
       - name: Package
         id: package
-        run: ./scripts/package/windows.ps1
+        run: ./scripts/package/windows.ps1 -Installers
+      - name: Installer smoke test
+        run: ./scripts/smoke/windows-installers.ps1
       - name: Packaged application smoke test
         run: ./scripts/smoke/windows.ps1
       - uses: actions/upload-artifact@v4
@@ -54,6 +56,9 @@ jobs:
           path: |
             target/windows-bundle/smoke/*.log
             target/windows-bundle/smoke/*.png
+            target/windows-bundle/installer-smoke/*.log
+            target/windows-bundle/installer-smoke/*.png
+            target/windows-bundle/installer-logs/*.log
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always() && steps.package.outcome == 'success'
@@ -62,4 +67,8 @@ jobs:
           path: |
             target/windows-bundle/Sidedoor-windows-x64.zip
             target/windows-bundle/Sidedoor-windows-x64.zip.sha256
+            target/windows-bundle/Sidedoor-windows-x64.msi
+            target/windows-bundle/Sidedoor-windows-x64.msi.sha256
+            target/windows-bundle/Sidedoor-windows-x64-setup.exe
+            target/windows-bundle/Sidedoor-windows-x64-setup.exe.sha256
           if-no-files-found: error

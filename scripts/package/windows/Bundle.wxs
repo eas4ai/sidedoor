@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
+  <Bundle Name="Sidedoor" Version="$(var.Version)" Manufacturer="Lasse Vestergaard"
+          UpgradeCode="A2D77E65-9C2E-4353-9348-5D99A5ECA6D9" IconSourceFile="$(var.Icon)"
+          AboutUrl="https://github.com/lassejlv/sidedoor">
+    <BootstrapperApplicationRef Id="WixStandardBootstrapperApplication.HyperlinkLicense">
+      <bal:WixStandardBootstrapperApplication LicenseUrl="" />
+    </BootstrapperApplicationRef>
+    <!-- The EXE installs the exact MSI published beside it, using the same
+         upgrade/uninstall owner and embedding the entire payload for offline use. -->
+    <Chain>
+      <MsiPackage SourceFile="$(var.Msi)" Compressed="yes" Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

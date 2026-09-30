@@ -19,7 +19,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev
+            libvulkan-dev libfontconfig-dev libx11-xcb-dev libxcb-xkb-dev \
+            dpkg-dev rpm desktop-file-utils cpio
       - name: Rust toolchain
         run: |
           rustup update stable
@@ -38,8 +39,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
       - name: Package
-        run: ./scripts/package/linux.sh
+        run: ./scripts/package/linux.sh --packages
+      - name: Installer smoke test
+        run: ./scripts/smoke/linux-installers.sh
       - uses: actions/upload-artifact@v4
         with:
           name: Sidedoor-linux-x86_64
-          path: target/release/bundle/Sidedoor-linux-x86_64.tar.gz
+          path: |
+            target/release/bundle/Sidedoor-linux-x86_64.tar.gz
+            target/release/bundle/Sidedoor-linux-x86_64.deb
+            target/release/bundle/Sidedoor-linux-x86_64.rpm
+            target/release/bundle/Sidedoor-linux-x86_64.*.sha256
+          if-no-files-found: error

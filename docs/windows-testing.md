@@ -1,8 +1,11 @@
 # Sidedoor Windows test build
 
-Extract the whole ZIP to a folder, then run `Sidedoor.exe`. Keep `bun.exe` and
+Run the setup EXE or MSI to install into `Program Files\Sidedoor` with a Start
+menu shortcut and an uninstall entry. Both installers require administrator
+access and include Bun and the complete plugin payload. For the portable build,
+extract the whole ZIP to a folder, then run `Sidedoor.exe`. Keep `bun.exe` and
 the `resources` folder beside it. No separate Bun installation or administrator
-access is required. This is an unsigned test build, so Windows may show a
+access is required for the ZIP. This is an unsigned test build, so Windows may show a
 publisher warning.
 
 The dock starts at the right screen edge. Its notification-area icon opens
@@ -11,6 +14,9 @@ and Quit. Clipboard History opens with **Ctrl+Alt+V**.
 
 Please check:
 
+- Install with each installer, upgrade from an older numeric version, and
+  uninstall. Check that the shortcut and application files are removed while
+  settings and plugins remain. Test the portable ZIP separately.
 - Reveal and hide the dock at the left, right, and bottom edges.
 - Hover Weather, Stats, and Clipboard; check rounded cards, arrows, text spacing,
   blur, and transitions against the Mac version.

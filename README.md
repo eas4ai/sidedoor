@@ -51,11 +51,22 @@ package includes Bun and the plugin SDK, so there's nothing else to install.
 
 | Platform | File | |
 | --- | --- | --- |
-| macOS (Apple Silicon) | `Sidedoor-macos-arm64.zip` | Unzip and move `Sidedoor.app` to Applications |
-| Linux (x86_64, X11) | `Sidedoor-linux-x86_64.tar.gz` | Extract and run `./sidedoor` |
-| Windows (x64) | `Sidedoor-windows-x64.zip` | Extract the whole folder and run `Sidedoor.exe` |
+| macOS (Apple Silicon) | `Sidedoor-macos-arm64.dmg` | Open and drag `Sidedoor.app` to Applications |
+| macOS portable | `Sidedoor-macos-arm64.zip` | Unzip and move `Sidedoor.app` to Applications |
+| Debian / Ubuntu (x86_64, X11) | `Sidedoor-linux-x86_64.deb` | `sudo apt install ./Sidedoor-linux-x86_64.deb` |
+| Fedora / RPM (x86_64, X11) | `Sidedoor-linux-x86_64.rpm` | `sudo dnf install ./Sidedoor-linux-x86_64.rpm` |
+| Linux portable (x86_64, X11) | `Sidedoor-linux-x86_64.tar.gz` | Extract and run `./Sidedoor-linux-x86_64/sidedoor` |
+| Windows (x64) | `Sidedoor-windows-x64-setup.exe` | Run setup (administrator access required) |
+| Windows MSI (x64) | `Sidedoor-windows-x64.msi` | Install with Windows Installer (administrator access required) |
+| Windows portable (x64) | `Sidedoor-windows-x64.zip` | Extract the whole folder and run `Sidedoor.exe` |
 
 Each file has a `.sha256` checksum next to it.
+
+Windows installers are unsigned and install into `Program Files\Sidedoor`,
+with a Start menu shortcut and an uninstall entry. The setup EXE embeds the
+MSI and works offline. Settings and plugins stay in your user data folder.
+Linux packages are built on Ubuntu 24.04; RPM dependencies also require a
+distribution with compatible library versions, an X11 session, and a Vulkan driver.
 
 > [!NOTE]
 > The macOS app isn't notarized yet. The first time, right-click it and
@@ -175,13 +186,22 @@ cd ..
 
 | Script | Output |
 | --- | --- |
-| `scripts/package/macos.sh` | `target/release/bundle/Sidedoor.app` |
-| `scripts/package/linux.sh` | `target/release/bundle/Sidedoor-linux-<arch>.tar.gz` |
-| `scripts/package/windows.ps1` | `target/windows-bundle/Sidedoor-windows-x64.zip` |
+| `scripts/package/macos.sh` | `target/release/bundle/Sidedoor.app`, ZIP, DMG, checksums |
+| `scripts/package/linux.sh` | `target/release/bundle/Sidedoor-linux-<arch>.tar.gz`, checksum |
+| `scripts/package/linux.sh --packages` | Also DEB, RPM, checksums (needs `dpkg-dev rpm desktop-file-utils`) |
+| `scripts/package/windows.ps1` | `target/windows-bundle/Sidedoor-windows-x64.zip`, checksum |
+| `scripts/package/windows.ps1 -Installers` | Also MSI, setup EXE, checksums (downloads pinned WiX 3.14.1) |
 
-Publishing a GitHub release as a **pre-release** builds all three with the
+Publishing a GitHub release as a **pre-release** builds every format with the
 [Release workflow](.github/workflows/release.yml), attaches them, and marks
 the release as latest.
+
+The workflow checks out the release tag, so the tag must include these packaging
+changes. Re-running a release for an older tag uses its older scripts. Installer
+versions come from the tag via `SIDEDOOR_VERSION`; local builds use the workspace
+version. Windows Installer compares only the numeric `major.minor.patch`, so
+use a new numeric version for each Windows upgrade. DEB and RPM preserve
+prerelease ordering with `~`.
 
 ## Project layout
 
