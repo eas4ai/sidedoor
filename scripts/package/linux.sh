@@ -13,7 +13,8 @@ cd "$(dirname "$0")/../.."
 
 NAME="Sidedoor"
 EXECUTABLE="sidedoor"
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+# SIDEDOOR_VERSION overrides the workspace version, e.g. with a release tag.
+VERSION=${SIDEDOOR_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)}
 ARCH=$(uname -m)
 
 OUT="target/release/bundle"

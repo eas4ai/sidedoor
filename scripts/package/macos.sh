@@ -14,7 +14,8 @@ cd "$(dirname "$0")/../.."
 NAME="Sidedoor"
 BUNDLE_ID="com.lassevestergaard.sidedoor"
 EXECUTABLE="sidedoor"
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+# SIDEDOOR_VERSION overrides the workspace version, e.g. with a release tag.
+VERSION=${SIDEDOOR_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)}
 BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 
 OUT="target/release/bundle"
@@ -82,7 +83,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>$VERSION</string>
+    <string>${VERSION%%-*}</string>
     <key>CFBundleVersion</key>
     <string>$BUILD</string>
     <key>LSApplicationCategoryType</key>
