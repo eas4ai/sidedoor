@@ -852,9 +852,7 @@ fn downloads_plugins_from_github_git_and_archives() {
     };
     let fetch = |link: &str| installer.fetch(&Link::parse(link).unwrap());
 
-    let staged =
-        fetch("https://github.com/lassejlv/sidedoor/tree/main/sdk/examples/plugins/pomodoro")
-            .unwrap();
+    let staged = fetch("https://github.com/lassejlv/sidedoor/tree/main/plugins/pomodoro").unwrap();
     assert_eq!(
         (staged.manifest.name.as_str(), staged.id.as_str()),
         ("Pomodoro", "pomodoro")

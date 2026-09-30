@@ -366,6 +366,29 @@ fn install_from_link(
             return;
         }
     };
+    install(
+        dock,
+        source,
+        expanded,
+        move |window, cx| field.update(cx, |field, cx| field.set_value("", window, cx)),
+        window,
+        cx,
+    );
+}
+
+/// Downloads the plugin at `source`, asks whether to trust it, then installs
+/// it, puts it in the dock and shows its details.
+fn install(
+    dock: Entity<Dock>,
+    source: Link,
+    expanded: Entity<Expanded>,
+    on_installed: impl FnOnce(&mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if matches!(dock.read(cx).install, InstallState::Downloading(_)) {
+        return;
+    }
     let installer = dock.read(cx).installer();
     dock.update(cx, |dock, cx| {
         dock.set_install(InstallState::Downloading(source.label().into()), cx)
@@ -407,7 +430,7 @@ fn install_from_link(
                 }
                 match dock.update(cx, |dock, cx| dock.finish_install(staged, cx)) {
                     Ok(manifest) => {
-                        field.update(cx, |field, cx| field.set_value("", window, cx));
+                        on_installed(window, cx);
                         expanded.update(cx, |expanded, cx| {
                             expanded.0.insert(manifest.id);
                             cx.notify();
@@ -486,6 +509,7 @@ pub fn plugins_page(
 ) -> Vec<AnyElement> {
     let page = Page::new(dock_entity, window, cx);
     let mut sections = vec![get_plugins(&page, palette, cx)];
+    sections.extend(gallery(&page, palette, cx));
 
     // Copied out first, so the fields below can use the window.
     struct Listed {
@@ -730,6 +754,103 @@ fn get_plugins(page: &Page, palette: Palette, cx: &mut App) -> AnyElement {
     )
 }
 
+/// Plugins from the gallery, each a click from installed.
+fn gallery(page: &Page, palette: Palette, cx: &mut App) -> Option<AnyElement> {
+    let dock = page.dock.read(cx);
+    if dock.gallery.is_empty() {
+        return None;
+    }
+    let installed = dock.installed_plugins();
+    let downloading = match &dock.install {
+        InstallState::Downloading(label) => Some(label.clone()),
+        _ => None,
+    };
+    let rows = dock
+        .gallery
+        .iter()
+        .filter_map(|entry| {
+            let link = Link::parse(&entry.link).ok()?;
+            // Installed from here, or a plugin of the same name already in
+            // the plugins folder, which installing would only duplicate.
+            let folder = link
+                .path
+                .as_deref()
+                .and_then(|path| path.rsplit('/').next());
+            let have = installed.iter().any(|manifest| {
+                manifest
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.link.same_plugin(&link))
+                    || Some(manifest.id.as_str()) == folder
+                    || manifest.name.eq_ignore_ascii_case(&entry.name)
+            });
+            let installing = downloading.as_deref() == Some(link.label().as_str());
+            let label = if have {
+                "Installed"
+            } else if installing {
+                "Installing…"
+            } else {
+                "Install"
+            };
+            let adding = page.clone();
+            let button = push_button(
+                SharedString::from(format!("gallery:{}", entry.name)),
+                label,
+                palette,
+                !have && downloading.is_none(),
+                false,
+                move |window, cx| {
+                    install(
+                        adding.dock.clone(),
+                        link.clone(),
+                        adding.expanded.clone(),
+                        |_, _| {},
+                        window,
+                        cx,
+                    )
+                },
+            );
+            Some(
+                div()
+                    .min_h(px(40.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(icon_tile(
+                        plugin_host::manifest::icon_path(&entry.icon),
+                        palette.orange,
+                        palette,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(entry.name.clone())
+                            .child(
+                                div()
+                                    .text_size(px(text::SUBHEADLINE))
+                                    .text_color(palette.secondary)
+                                    .child(entry.description.clone()),
+                            ),
+                    )
+                    .child(button)
+                    .into_any_element(),
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(section(
+        Some("Gallery"),
+        rows,
+        Some("Plugins from the Sidedoor project. You'll be asked before one is installed.".into()),
+        palette,
+    ))
+}
+
 /// A plugin's icon, tinted like its dock item in Settings › Items.
 pub(crate) fn plugin_icon(manifest: &Manifest, palette: Palette) -> AnyElement {
     let fill = match manifest.id.as_str() {
@@ -738,6 +859,11 @@ pub(crate) fn plugin_icon(manifest: &Manifest, palette: Palette) -> AnyElement {
         crate::builtins::STATS => palette.green,
         _ => palette.orange,
     };
+    icon_tile(manifest.icon_path(), fill, palette)
+}
+
+/// A glyph on a small rounded square of `fill`.
+fn icon_tile(path: String, fill: gpui_kit::Hsla, palette: Palette) -> AnyElement {
     div()
         .size(px(22.0))
         .m(px(1.0))
@@ -749,7 +875,7 @@ pub(crate) fn plugin_icon(manifest: &Manifest, palette: Palette) -> AnyElement {
         .justify_center()
         .child(
             svg()
-                .path(manifest.icon_path())
+                .path(path)
                 .size(px(13.0))
                 .text_color(palette.on_accent),
         )

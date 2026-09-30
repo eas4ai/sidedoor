@@ -223,6 +223,11 @@ pub struct Dock {
     open_plugin: Option<String>,
     /// Plugins the user agreed to run, by id.
     trusted: BTreeSet<String>,
+    /// Plugins to offer in Settings › Plugins: the built-in list until the
+    /// current one is fetched.
+    pub gallery: Vec<services::gallery::Entry>,
+    /// The current gallery is being fetched, or was this session.
+    gallery_task: Option<Task<()>>,
     /// Where apps dragged in from another app would land, while they're held
     /// over the dock. The dock grows a slot to make room for them.
     incoming: Option<usize>,
@@ -334,6 +339,8 @@ impl Dock {
             plugin_settings: config.plugin_settings,
             open_plugin: None,
             trusted,
+            gallery: services::gallery::bundled(),
+            gallery_task: None,
             incoming: None,
             discovered,
             login_item: LoginItem::default(),
@@ -963,6 +970,32 @@ impl Dock {
         }
         self.open_path(&manifest.dir.join(&manifest.main));
         Ok(manifest)
+    }
+
+    /// Fetches the current plugin gallery, once a session. Until it arrives,
+    /// or if it can't, the built-in list shows.
+    pub fn refresh_gallery(&mut self, cx: &mut Context<Self>) {
+        if !self.live || self.gallery_task.is_some() {
+            return;
+        }
+        self.gallery_task = Some(cx.spawn(async move |this, cx| {
+            let fetched = cx
+                .background_executor()
+                .spawn(async { services::gallery::fetch() })
+                .await;
+            match fetched {
+                Ok(gallery) => {
+                    this.update(cx, |this, cx| {
+                        if this.gallery != gallery {
+                            this.gallery = gallery;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                }
+                Err(err) => eprintln!("sidedoor: couldn't fetch the plugin gallery: {err}"),
+            }
+        }));
     }
 
     /// Picks up plugins added to or removed from the plugins folder.

@@ -2761,3 +2761,38 @@ fn drag_out(h: &Harness, cx: &mut TestAppContext) {
     .unwrap();
     cx.run_until_parked();
 }
+
+#[test]
+fn every_gallery_link_can_be_installed_from() {
+    for entry in services::gallery::bundled() {
+        let link = plugin_host::Link::parse(&entry.link)
+            .unwrap_or_else(|err| panic!("{}: {err}", entry.name));
+        assert!(link.path.is_some(), "{} should name a folder", entry.name);
+    }
+}
+
+#[gpui_kit::test]
+fn the_gallery_marks_plugins_already_installed(cx: &mut TestAppContext) {
+    let h = open_settings(cx, vec![ItemConfig::Weather]);
+    cx.update(|cx| {
+        h.dock.update(cx, |dock, _| {
+            dock.gallery = vec![services::gallery::Entry {
+                name: "Pomodoro".into(),
+                description: "A focus timer.".into(),
+                icon: "timer".into(),
+                link: "https://github.com/lassejlv/sidedoor/tree/main/plugins/pomodoro".into(),
+                platforms: Vec::new(),
+            }];
+        })
+    });
+    h.press(cx, "cmd-4");
+    let label = |cx: &mut TestAppContext| {
+        cx.update_window(h.window, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("gallery:Pomodoro").is_some()
+        })
+        .unwrap()
+    };
+    assert!(label(cx));
+    assert_eq!(h.tab(cx), Tab::Plugins);
+}

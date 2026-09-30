@@ -215,6 +215,9 @@ impl SettingsWindow {
     }
 
     pub fn set_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        if tab == Tab::Plugins {
+            self.dock.update(cx, |dock, cx| dock.refresh_gallery(cx));
+        }
         if tab != self.tab {
             self.tab = tab;
             window.set_window_title(tab.title());

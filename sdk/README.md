@@ -79,7 +79,7 @@ Plugins don't share state, and one that throws or hangs only stops itself.
 The working directory is shared, so find your own files with
 `import.meta.dir` rather than relative paths.
 
-See [`examples/plugins/pomodoro`](examples/plugins/pomodoro) for a full widget with a custom dock tile, a setting and a fitted card.
+See [`plugins/pomodoro`](../plugins/pomodoro) for a full widget with a custom dock tile, a setting and a fitted card.
 
 ## Sharing a plugin
 
@@ -377,7 +377,7 @@ linked SDK doesn't bring Bun's types. Create the `package.json` first:
 without one, `bun add` installs into the nearest parent folder that has one,
 such as your home folder. A `package.json` with only `devDependencies` is
 safe to share: installing a plugin only installs its `dependencies`. See
-`examples/plugins/pomodoro/index.test.tsx`.
+`plugins/pomodoro/index.test.tsx`.
 
 ## Protocol
 

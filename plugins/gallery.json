@@ -1,0 +1,17 @@
+{
+  "plugins": [
+    {
+      "name": "Spotify",
+      "description": "What's playing in the Spotify app, with playback controls, a seek bar and volume.",
+      "icon": "music",
+      "link": "https://github.com/lassejlv/sidedoor/tree/main/plugins/spotify",
+      "platforms": ["macos"]
+    },
+    {
+      "name": "Pomodoro",
+      "description": "A focus timer for 15, 25 or 50 minute sessions that notifies you when one ends.",
+      "icon": "timer",
+      "link": "https://github.com/lassejlv/sidedoor/tree/main/plugins/pomodoro"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Example: Pomodoro
 
-A complete plugin, copied from [`sdk/examples/plugins/pomodoro`](https://github.com/lassejlv/sidedoor/tree/main/sdk/examples/plugins/pomodoro). It shows:
+A complete plugin, copied from [`plugins/pomodoro`](https://github.com/lassejlv/sidedoor/tree/main/plugins/pomodoro). It shows:
 
 - a custom tile
 - a fitted card
