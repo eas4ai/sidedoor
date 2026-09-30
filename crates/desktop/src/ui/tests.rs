@@ -2632,3 +2632,132 @@ fn images_a_window_stops_drawing_are_freed(cx: &mut TestAppContext) {
         assert_eq!(cached(cx), 1);
     }
 }
+
+/// Drags `paths` in from another app, as Finder does, holding them over the
+/// dock at `at` (in the dock window) for a moment.
+fn drag_in(
+    h: &Harness,
+    cx: &mut TestAppContext,
+    paths: &[&str],
+    at: gpui_kit::Point<gpui_kit::Pixels>,
+) {
+    let paths = gpui_kit::ExternalPaths(paths.iter().map(PathBuf::from).collect());
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.dispatch_event(
+            gpui_kit::PlatformInput::FileDrop(gpui_kit::FileDropEvent::Entered {
+                position: at,
+                paths,
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            gpui_kit::PlatformInput::FileDrop(gpui_kit::FileDropEvent::Pending { position: at }),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn apps_dragged_in_from_finder_open_a_gap_and_land_in_it(cx: &mut TestAppContext) {
+    let h = setup(
+        cx,
+        vec![
+            app("com.example.alpha"),
+            app("com.example.beta"),
+            app("com.example.gamma"),
+        ],
+    );
+    let center = |cx: &mut TestAppContext, id: &str| {
+        let id = SharedString::from(format!("app:com.example.{id}"));
+        cx.update_window(h.dock_window, |_, window, cx| {
+            window.render_frame(cx);
+            window.find(id).bounds().center()
+        })
+        .unwrap()
+    };
+    let (beta, gamma) = (center(cx, "beta"), center(cx, "gamma"));
+    let slots = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let frame = h.dock.read(cx).frame();
+            frame.width.max(frame.height)
+        })
+    };
+    let before = slots(cx);
+
+    // Held over beta, Delta gets beta's slot: the dock grows a slot, and
+    // beta and gamma slide along to make room.
+    drag_in(&h, cx, &["/Applications/Delta.app"], beta);
+    assert_eq!(cx.update(|cx| h.dock.read(cx).incoming()), Some(1));
+    assert_eq!(slots(cx) - before, geometry::SLOT);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!((f32::from(center(cx, "beta").y) - f32::from(gamma.y)).abs() < 1.0);
+    assert!(h.platform.saved_configs.borrow().is_empty());
+
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.dispatch_event(
+            gpui_kit::PlatformInput::FileDrop(gpui_kit::FileDropEvent::Submit { position: beta }),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        h.item_ids(cx),
+        [
+            "app:com.example.alpha",
+            "app:com.example.delta",
+            "app:com.example.beta",
+            "app:com.example.gamma"
+        ]
+    );
+    assert_eq!(cx.update(|cx| h.dock.read(cx).incoming()), None);
+}
+
+#[gpui_kit::test]
+fn dragging_in_something_the_dock_cant_take_opens_no_gap(cx: &mut TestAppContext) {
+    let h = setup(cx, vec![app("com.example.alpha"), app("com.example.beta")]);
+    let beta = cx
+        .update_window(h.dock_window, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("app:com.example.beta").bounds().center()
+        })
+        .unwrap();
+    // A document, and an app already in the dock.
+    drag_in(
+        &h,
+        cx,
+        &["/Users/me/notes.txt", "/Applications/Alpha.app"],
+        beta,
+    );
+    assert_eq!(cx.update(|cx| h.dock.read(cx).incoming()), None);
+    drag_out(&h, cx);
+
+    // Leaving the window closes a gap that was open.
+    drag_in(&h, cx, &["/Applications/Delta.app"], beta);
+    assert_eq!(cx.update(|cx| h.dock.read(cx).incoming()), Some(1));
+    drag_out(&h, cx);
+    assert_eq!(cx.update(|cx| h.dock.read(cx).incoming()), None);
+    assert_eq!(
+        h.item_ids(cx),
+        ["app:com.example.alpha", "app:com.example.beta"]
+    );
+}
+
+/// Takes a drag from another app back out of the dock window.
+fn drag_out(h: &Harness, cx: &mut TestAppContext) {
+    cx.update_window(h.dock_window, |_, window, cx| {
+        window.dispatch_event(
+            gpui_kit::PlatformInput::FileDrop(gpui_kit::FileDropEvent::Exited),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}

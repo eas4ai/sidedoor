@@ -14,7 +14,6 @@ pub(super) fn slot(
     motion: SlotMotion,
     edge: Edge,
     shortcut: Option<String>,
-    palette: Palette,
 ) -> AnyElement {
     let dragged = DraggedSlot {
         index,
@@ -22,7 +21,10 @@ pub(super) fn slot(
             ItemKind::App(app) => app.icon.clone(),
             _ => None,
         },
-        glyph: widget_glyph(&item.kind),
+        plugin: match &item.kind {
+            ItemKind::Plugin(manifest) => Some(manifest.clone()),
+            _ => None,
+        },
     };
     let is_app = matches!(item.kind, ItemKind::App(_));
     let id = item.id.clone();
@@ -43,7 +45,7 @@ pub(super) fn slot(
 
     let hover = dock_entity.clone();
     let click = dock_entity.clone();
-    let drop_paths = dock_entity.clone();
+    let preview_dock = dock_entity.clone();
     let press = view.clone();
     let menu_dock = dock_entity.clone();
 
@@ -127,15 +129,12 @@ pub(super) fn slot(
         )
         // Reordering is handled by the dock: it opens a gap under the
         // pointer and drops the item there.
-        .on_drag(dragged, |dragged, _, _, cx| {
-            cx.new(|_| DragPreview(dragged.clone()))
-        })
-        .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(palette.accent_fill))
-        .on_drop(move |paths: &ExternalPaths, _, cx: &mut App| {
-            drop_paths.update(cx, |dock, cx| {
-                dock.add_paths(paths.paths(), Some(index), cx)
-            });
-            cx.stop_propagation();
+        .on_drag(dragged, move |dragged, _, _, cx| {
+            let dock = preview_dock.clone();
+            cx.new(|_| DragPreview {
+                slot: dragged.clone(),
+                dock,
+            })
         })
         // The dragged item's own slot stays empty: it is the gap.
         .when(motion.lifted, |element| element.opacity(0.0))

@@ -223,6 +223,9 @@ pub struct Dock {
     open_plugin: Option<String>,
     /// Plugins the user agreed to run, by id.
     trusted: BTreeSet<String>,
+    /// Where apps dragged in from another app would land, while they're held
+    /// over the dock. The dock grows a slot to make room for them.
+    incoming: Option<usize>,
     /// Plugins in the plugins folder, as of the last scan. Reading them is
     /// disk work, so views use this rather than scanning as they draw.
     discovered: Vec<Manifest>,
@@ -331,6 +334,7 @@ impl Dock {
             plugin_settings: config.plugin_settings,
             open_plugin: None,
             trusted,
+            incoming: None,
             discovered,
             login_item: LoginItem::default(),
             install: InstallState::Idle,
@@ -369,7 +373,33 @@ impl Dock {
 
     /// Frame of the dock while shown.
     pub fn frame(&self) -> Rect {
-        geometry::dock_frame(self.screen, self.edge, self.items.len())
+        let slots = self.items.len() + usize::from(self.incoming.is_some());
+        geometry::dock_frame(self.screen, self.edge, slots)
+    }
+
+    /// The slot that apps dragged in from another app would land in.
+    pub fn incoming(&self) -> Option<usize> {
+        self.incoming
+    }
+
+    /// Opens a gap at slot `at` for apps being dragged in, or closes it.
+    pub fn set_incoming(&mut self, at: Option<usize>, cx: &mut Context<Self>) {
+        let at = at.map(|at| at.min(self.items.len()));
+        if at != self.incoming {
+            self.incoming = at;
+            cx.notify();
+        }
+    }
+
+    /// Whether dropping `paths` would add anything: an app not already in
+    /// the dock, with room for it.
+    pub fn accepts_paths(&self, paths: &[PathBuf]) -> bool {
+        self.items.len() < MAX_ITEMS
+            && paths.iter().any(|path| {
+                self.platform
+                    .app_at(path)
+                    .is_some_and(|app| self.index_of(&DockItem::app(app).id).is_none())
+            })
     }
 
     pub fn is_shown(&self) -> bool {
@@ -536,6 +566,7 @@ impl Dock {
         at: Option<usize>,
         cx: &mut Context<Self>,
     ) -> usize {
+        self.incoming = None;
         let mut at = at.unwrap_or(self.items.len()).min(self.items.len());
         let mut added = 0;
         for path in paths {
@@ -555,6 +586,9 @@ impl Dock {
         }
         if added > 0 {
             self.items_changed(cx);
+        } else {
+            // Nothing to add, but a gap held open for the drop closes.
+            cx.notify();
         }
         added
     }

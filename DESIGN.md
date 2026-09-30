@@ -236,6 +236,10 @@ Some smaller rules:
   closes, and its neighbors slide apart to open a gap under the pointer.
   Dropping it lands it in the gap; dragging it off the dock puts the gap
   back where it came from.
+  A plugin carries its live tile, on a piece of the dock's surface.
+- Apps dragged in from Finder part the icons the same way: the dock grows a
+  slot and the gap follows the pointer. Documents, apps already in the dock
+  and a full dock open no gap.
 - Right-click shows a context menu, as on any Mac. A plugin's own actions go at
   the top, in order.
 - Menu items and buttons use Mac title case. A menu command that asks for more

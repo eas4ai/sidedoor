@@ -124,14 +124,46 @@ pub(crate) fn icon(path: SharedString, size: f32, color: Hsla) -> impl IntoEleme
 struct DraggedSlot {
     index: usize,
     icon: Option<PathBuf>,
-    glyph: SharedString,
+    /// A plugin carries its live tile along.
+    plugin: Option<plugin_host::Manifest>,
 }
 
-struct DragPreview(DraggedSlot);
+struct DragPreview {
+    slot: DraggedSlot,
+    dock: Entity<Dock>,
+}
 
 impl Render for DragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let artwork = match &self.0.icon {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Lifted out of the dock whole, as the Dock does, not as a ghost.
+        if let Some(manifest) = &self.slot.plugin {
+            let palette = Palette::new(window, self.dock.read(cx).accessibility);
+            let tile = self
+                .dock
+                .read(cx)
+                .plugin(&manifest.id)
+                .and_then(|state| state.tile.clone());
+            // Off the dock's surface, the tile brings a piece of it along.
+            return div()
+                .size(px(SLOT as f32))
+                .rounded(px(12.0))
+                .bg(palette.surface)
+                .border_1()
+                .border_color(palette.stroke)
+                .shadow_md()
+                .text_color(palette.label)
+                .child(plugin_tile(
+                    &self.dock,
+                    manifest,
+                    tile.as_deref(),
+                    1.0,
+                    palette,
+                    window,
+                    cx,
+                ))
+                .into_any_element();
+        }
+        let artwork = match &self.slot.icon {
             Some(path) => img(path.clone()).size(px(APP_ICON)).into_any_element(),
             None => div()
                 .size(px(TILE))
@@ -140,11 +172,10 @@ impl Render for DragPreview {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(icon(self.0.glyph.clone(), 18.0, gpui_kit::white()))
+                .child(icon(IconName::AppWindow.path(), 18.0, gpui_kit::white()))
                 .into_any_element(),
         };
-        // Lifted out of the dock whole, as the Dock does, not as a ghost.
-        div().child(artwork)
+        div().child(artwork).into_any_element()
     }
 }
 
@@ -201,7 +232,7 @@ impl DockView {
 
     /// Samples every item's springs and transitions for this frame.
     fn sample_motion(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<SlotMotion> {
-        let (items, shown): (Vec<(SharedString, bool)>, bool) = {
+        let (items, shown, incoming): (Vec<(SharedString, bool)>, bool, Option<usize>) = {
             let dock = self.dock.read(cx);
             let items = dock
                 .items
@@ -214,7 +245,7 @@ impl DockView {
                     (item.id.clone(), running)
                 })
                 .collect();
-            (items, dock.is_shown())
+            (items, dock.is_shown(), dock.incoming())
         };
         let dragging = cx.has_active_drag();
         let count = items.len();
@@ -265,9 +296,12 @@ impl DockView {
                 // ended now. Tracked in dock coordinates rather than as an
                 // offset, so when the drop reorders the items each one is
                 // already where its new slot puts it, and nothing jumps.
-                let target = reorder.map_or(index, |reorder| {
-                    geometry::reordered_slot(index, reorder.from, reorder.to)
-                });
+                // Apps dragged in from Finder part the items the same way.
+                let target = match (reorder, incoming) {
+                    (Some(reorder), _) => geometry::reordered_slot(index, reorder.from, reorder.to),
+                    (None, Some(at)) if index >= at => index + 1,
+                    _ => index,
+                };
                 let position = spring(
                     SharedString::from(format!("position:{id}")),
                     SLOT as f32 * target as f32,
@@ -292,6 +326,10 @@ impl DockView {
         // A drag that ended anywhere, dropped or not, lets the items settle.
         if !cx.has_active_drag() {
             self.reorder = None;
+            if self.dock.read(cx).incoming().is_some() {
+                let dock = self.dock.clone();
+                cx.defer(move |cx| dock.update(cx, |dock, cx| dock.set_incoming(None, cx)));
+            }
         }
         let motions = self.sample_motion(window, cx);
         let view = cx.entity();
@@ -348,12 +386,12 @@ impl DockView {
                 };
                 let shortcut = dock.shortcut_for(&item.id).map(ToString::to_string);
                 slot(
-                    &self.dock, &view, index, item, content, motion, edge, shortcut, palette,
+                    &self.dock, &view, index, item, content, motion, edge, shortcut,
                 )
             })
             .collect();
 
-        let append_paths = self.dock.clone();
+        let (append_paths, incoming_dock) = (self.dock.clone(), self.dock.clone());
         let (drop_dock, drop_view) = (self.dock.clone(), view.clone());
         let container = div()
             .id("dock")
@@ -388,9 +426,47 @@ impl DockView {
                     cx.notify();
                 }),
             )
-            .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(palette.blue))
+            // Apps dragged in from Finder open a gap under the pointer, and
+            // land in it.
+            .on_drag_move(
+                move |event: &DragMoveEvent<ExternalPaths>, _, cx: &mut App| {
+                    let paths = event.drag(cx).paths().to_vec();
+                    let (along, across, length, thickness) = if vertical {
+                        (
+                            event.event.position.y - event.bounds.top(),
+                            event.event.position.x - event.bounds.left(),
+                            event.bounds.size.height,
+                            event.bounds.size.width,
+                        )
+                    } else {
+                        (
+                            event.event.position.x - event.bounds.left(),
+                            event.event.position.y - event.bounds.top(),
+                            event.bounds.size.width,
+                            event.bounds.size.height,
+                        )
+                    };
+                    let over = along >= px(0.0)
+                        && along <= length
+                        && across >= px(0.0)
+                        && across <= thickness;
+                    incoming_dock.update(cx, |dock, cx| {
+                        let at = (over
+                            && (dock.incoming().is_some() || dock.accepts_paths(&paths)))
+                        .then(|| {
+                            // The gap is a slot of its own, so the pointer
+                            // picks among one more slot than there are items.
+                            geometry::drop_slot(f64::from(f32::from(along)), dock.items.len() + 1)
+                        });
+                        dock.set_incoming(at, cx);
+                    });
+                },
+            )
             .on_drop(move |paths: &ExternalPaths, _, cx: &mut App| {
-                append_paths.update(cx, |dock, cx| dock.add_paths(paths.paths(), None, cx));
+                append_paths.update(cx, |dock, cx| {
+                    let at = dock.incoming();
+                    dock.add_paths(paths.paths(), at, cx)
+                });
             })
             // Follows a drag of one of the items: the slot under the pointer
             // opens up. Off the dock, the gap closes back where it came from.
