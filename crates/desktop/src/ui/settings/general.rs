@@ -1,7 +1,5 @@
 use super::*;
 use crate::app::updates::{State as AppUpdateState, VERSION};
-use gpui_kit::base::Disableable as _;
-use gpui_kit::component::{Sizable as _, button::Button};
 
 pub(super) fn general_page(
     dock_entity: &Entity<Dock>,
@@ -74,16 +72,16 @@ pub(super) fn general_page(
     let updates = dock.app_updates.clone();
     let state = &updates.read(cx).state;
     let (status, label, enabled) = match state {
-        AppUpdateState::Idle => (format!("Version {VERSION}"), "Check for updates", true),
+        AppUpdateState::Idle => (format!("Version {VERSION}"), "Check for Updates", true),
         AppUpdateState::Checking => ("Checking for updates…".into(), "Checking…", false),
         AppUpdateState::Current => (
             format!("Sidedoor {VERSION} is up to date."),
-            "Check for updates",
+            "Check for Updates",
             true,
         ),
         AppUpdateState::Available(release) => (
             format!("Version {} is available.", release.version),
-            "Download update",
+            "Download Update",
             true,
         ),
         AppUpdateState::Downloading(release) => (
@@ -103,24 +101,27 @@ pub(super) fn general_page(
                     release.version
                 )
             },
-            "Install and restart",
+            "Install and Restart",
             true,
         ),
         AppUpdateState::Installing => ("Preparing to restart…".into(), "Installing…", false),
-        AppUpdateState::Failed(error) => (error.clone(), "Try again", true),
+        AppUpdateState::Failed(error) => (error.clone(), "Try Again", true),
     };
     let handler = updates.clone();
-    let action = Button::new("app-update-action")
-        .small()
-        .label(label)
-        .disabled(!enabled)
-        .on_click(move |_, _, cx| {
+    let action = push_button(
+        "app-update-action",
+        label,
+        palette,
+        enabled,
+        false,
+        move |_, cx| {
             handler.update(cx, |updates, cx| match updates.state {
                 AppUpdateState::Available(_) => updates.download(cx),
                 AppUpdateState::Ready(_) => updates.restart(cx),
                 _ => updates.check(false, cx),
             })
-        });
+        },
+    );
     let ready = matches!(state, AppUpdateState::Ready(_));
     let handler = updates.clone();
     let actions = div()
@@ -128,14 +129,14 @@ pub(super) fn general_page(
         .gap(px(8.0))
         .child(action)
         .when(ready, |buttons| {
-            buttons.child(
-                Button::new("discard-app-update")
-                    .small()
-                    .label("Discard download")
-                    .on_click(move |_, _, cx| {
-                        handler.update(cx, |updates, cx| updates.discard(cx))
-                    }),
-            )
+            buttons.child(push_button(
+                "discard-app-update",
+                "Discard Download",
+                palette,
+                true,
+                false,
+                move |_, cx| handler.update(cx, |updates, cx| updates.discard(cx)),
+            ))
         });
     let handler = dock_entity.clone();
     let automatic = crate::ui::switch::mac_switch("automatic-app-updates", palette)

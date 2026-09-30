@@ -207,7 +207,7 @@ prerelease ordering with `~`.
 
 Sidedoor checks stable GitHub releases at startup and every six hours. Open
 **Settings › General › Updates** to check manually, download an update, and
-choose **Install and restart**. Automatic checks can be turned off there.
+choose **Install and Restart**. Automatic checks can be turned off there.
 Downloads are checked against the release manifest's size and SHA-256 digest;
 an interrupted or invalid download leaves the installation untouched.
 
