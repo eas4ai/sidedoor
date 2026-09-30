@@ -57,6 +57,14 @@ pub mod text {
     pub const SUBHEADLINE: f32 = 11.0;
     pub const CAPTION: f32 = 10.0;
     pub const DISPLAY: f32 = 28.0;
+
+    /// `points` snapped to a quarter point. GPUI rasterizes and caches every
+    /// glyph at the exact size it's drawn, and never evicts, so text whose
+    /// size animates (dock magnification, `transition`, `enter`) would add
+    /// new glyphs on every frame. Snapped, it reuses a few sizes.
+    pub fn snap(points: f32) -> f32 {
+        (points * 4.0).round() / 4.0
+    }
 }
 
 pub(crate) fn is_dark(window: &Window) -> bool {

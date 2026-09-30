@@ -219,7 +219,7 @@ pub(super) fn app_tile(
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(text::TITLE3 * motion.scale))
+            .text_size(px(text::snap(text::TITLE3 * motion.scale)))
             .font_weight(FontWeight::SEMIBOLD)
             .child(app.name.chars().next().unwrap_or('?').to_string())
             .into_any_element(),

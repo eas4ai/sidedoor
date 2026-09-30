@@ -659,7 +659,7 @@ impl Surface {
                             element
                                 .min_w(px(width * scale))
                                 .h(px(height * scale))
-                                .text_size(px(text_size * scale))
+                                .text_size(px(text::snap(text_size * scale)))
                         } else {
                             element
                                 .relative()
@@ -1253,7 +1253,6 @@ fn apply<S: Styled>(el: S, name: &str, value: &Value, palette: Palette) -> S {
     );
     points!(
         gap, gap_x, gap_y, p, px, py, pt, pr, pb, pl, m, mx, my, mt, mr, mb, ml, rounded,
-        text_size,
     );
     lengths!(size, w, h, min_w, min_h, max_w, max_h);
     insets!(top, right, bottom, left);
@@ -1284,6 +1283,10 @@ fn apply<S: Styled>(el: S, name: &str, value: &Value, palette: Palette) -> S {
         },
         "border_color" => match color(Some(value), palette) {
             Some(color) => el.border_color(color),
+            None => el,
+        },
+        "text_size" => match value.as_f64() {
+            Some(size) => el.text_size(px(text::snap(size as f32))),
             None => el,
         },
         "opacity" => match value.as_f64() {
@@ -1350,6 +1353,18 @@ mod tests {
         assert_eq!(parse_hex("#ff000080"), Some(rgba(0xff000080).into()));
         assert_eq!(parse_hex("#12345"), None);
         assert_eq!(parse_hex("red"), None);
+    }
+
+    #[test]
+    fn magnified_text_is_drawn_at_a_few_sizes() {
+        // Every size text is drawn at stays in GPUI's glyph cache for good,
+        // so a magnification sweep must not make a new size per frame.
+        let mut sizes: Vec<f32> = (0..=1000)
+            .map(|step| text::snap(11.0 * (1.0 + 0.14 * step as f32 / 1000.0)))
+            .collect();
+        sizes.dedup();
+        assert!(sizes.len() <= 8, "{sizes:?}");
+        assert_eq!(text::snap(11.0), 11.0);
     }
 
     #[test]
