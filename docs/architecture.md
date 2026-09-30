@@ -15,13 +15,13 @@ and build automation. Application sources and assets belong to crates.
 │   │   └── src/
 │   │       ├── main.rs
 │   │       ├── app/              # Startup, dock state, host composition, windows, shortcuts
-│   │       ├── ui/               # Dock, clipboard, settings, plugins, shared theme
-│   │       └── builtins/         # Weather, Stats and Clipboard TSX plugins
+│   │       └── ui/               # Dock, settings, plugins, shared theme
 │   ├── domain/src/               # Pure models and state transitions
 │   ├── platform/src/             # Native API contract, paths, macos/, windows/ and linux/
-│   ├── services/src/             # Persistence, weather, stats and image IO
+│   ├── services/src/             # Persistence, the plugin gallery, updates and image IO
 │   └── plugin-host/src/          # Manifest, protocol, discovery, installs from links, runtime, reload and SDK
 ├── sdk/                          # Independent Bun/TypeScript package
+├── plugins/                      # Official plugins and the gallery list
 ├── skills/sidedoor-plugins/      # Agent skill for writing plugins (linked from .claude/skills)
 ├── scripts/
 │   ├── package/                  # macos.sh, windows.ps1 and linux.sh
@@ -46,7 +46,6 @@ graph TD
 ```
 
 - `domain` has no GPUI, native APIs, networking, subprocesses, or filesystem IO.
-  Clipboard image equality accepts a comparator so file reads remain in `services`.
 - `platform` provides native operations and presentation through one contract. Its
   GPUI dependency bridges native window handles. It does not depend on services
   or the plugin host.
@@ -56,9 +55,10 @@ graph TD
 - `services` owns fetching and persistence; `plugin-host` owns plugin processes
   and protocol messages. Neither imports desktop views.
 - `desktop::app::host` composes native operations, storage, and plugin startup.
-  UI tests substitute an in-memory host while exercising the real built-in TSX.
-- Rust sends live data to built-in plugins through the same protocol used by
-  user plugins. Shared GPUI rendering preserves the existing widget appearance.
+  UI tests substitute an in-memory host.
+- The app has no widgets of its own. Weather, Stats and Clipboard are official
+  plugins in `plugins/`, installed from the gallery like any other, and get
+  their data with Bun rather than from the app.
 
 ## Development and packaging
 
@@ -67,8 +67,8 @@ graph TD
 formatting. The root owns the lockfile, release profile, shared metadata and
 shared dependency versions.
 
-Built-in source imports point to the root SDK. Development resource lookup is
-relative to each owning crate's manifest. Packaging compiles built-ins into the
-app resources and includes Bun and the SDK, so installed builds do not rely on
-a checkout or a system Bun installation. The executable name, bundle identity,
-saved configuration, clipboard history, and user plugin locations are unchanged.
+Development resource lookup is relative to each owning crate's manifest.
+Packaging includes Bun and the SDK, so installed builds do not rely on a
+checkout or a system Bun installation. Saved configurations from before the
+official plugins point their Weather, Stats and Clipboard items, shortcuts and
+weather place at the plugins, which appear once installed.

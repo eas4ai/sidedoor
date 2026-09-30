@@ -2,7 +2,5 @@
 pub mod gallery;
 pub mod http;
 pub mod images;
-pub mod stats;
 pub mod storage;
 pub mod updates;
-pub mod weather;

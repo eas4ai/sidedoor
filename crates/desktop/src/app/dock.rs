@@ -1,38 +1,26 @@
-//! The dock model: its items, the live data behind them, and the edits the
+//! The dock model: its items, the plugins behind them, and the edits the
 //! user makes by dragging and right-clicking.
 
 use crate::app::host::{Accessibility, AppInfo, Host, LoginItem};
-use domain::clipboard::{self, ClipKind, History};
-use domain::config::{Appearance, Config, ItemConfig, MAX_ITEMS, WeatherLocation};
+use domain::config::{Appearance, Config, ItemConfig, MAX_ITEMS};
 use domain::geometry::{self, Edge, Rect, Reveal, Screen};
 use domain::shortcut::Shortcut;
 use futures::StreamExt as _;
 use gpui_kit::{AppContext as _, Context, EventEmitter, SharedString, Task};
 use plugin_host::{
-    ClipboardCommand, DataSource, HostMessage, Installer, Manifest, Node, PluginLink,
-    PluginMessage, Staged, apply_patches,
+    HostMessage, Installer, Manifest, Node, PluginLink, PluginMessage, Staged, apply_patches,
 };
-use services::stats::{Sampler, Snapshot};
-use services::weather::{self, Weather};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 const POINTER_INTERVAL: Duration = Duration::from_millis(40);
 const SYSTEM_INTERVAL: Duration = Duration::from_secs(2);
-pub const STATS_INTERVAL: Duration = Duration::from_secs(2);
-const PASTEBOARD_INTERVAL: Duration = Duration::from_millis(500);
-const WEATHER_INTERVAL: Duration = Duration::from_secs(20 * 60);
-const WEATHER_RETRY: Duration = Duration::from_secs(60);
-/// How often the weather task checks whether anything shows weather yet.
-const WEATHER_WAIT: Duration = Duration::from_secs(1);
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_secs(1);
-/// How long "Clear History" waits for its confirming second click.
-const CLEAR_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 /// How long a shortcut shows a widget's card before tucking the dock away.
 const PEEK: Duration = Duration::from_secs(3);
 /// Grace period before a card closes, so the pointer can travel onto it.
@@ -93,54 +81,18 @@ pub struct PluginState {
     /// The card's content height as last drawn, for cards that fit it.
     pub height: Option<f64>,
     link: Option<Box<dyn PluginLink>>,
-    data: HashMap<DataSource, serde_json::Value>,
     /// The plugin's files when it started; a change reloads it.
     fingerprint: u64,
     _task: Option<Task<()>>,
 }
 
-/// A widget the dock can hold, at most once each.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Widget {
-    Weather,
-    Clipboard,
-    Stats,
-}
-
-impl Widget {
-    pub const ALL: [Self; 3] = [Self::Weather, Self::Clipboard, Self::Stats];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Weather => "Weather",
-            Self::Clipboard => "Clipboard",
-            Self::Stats => "Stats",
-        }
-    }
-
-    fn id(self) -> &'static str {
-        match self {
-            Self::Weather => crate::builtins::WEATHER,
-            Self::Clipboard => crate::builtins::CLIPBOARD,
-            Self::Stats => crate::builtins::STATS,
-        }
-    }
-}
-
 /// Requests the dock makes of the app around it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DockEvent {
-    OpenClipboardHistory,
     /// A plugin asked for one of its windows.
-    OpenPluginWindow {
-        plugin: String,
-        key: String,
-    },
+    OpenPluginWindow { plugin: String, key: String },
     /// A plugin closed one of its windows, or stopped.
-    ClosePluginWindow {
-        plugin: String,
-        key: String,
-    },
+    ClosePluginWindow { plugin: String, key: String },
     /// Shortcuts were assigned or removed; re-register them.
     ShortcutsChanged,
 }
@@ -166,12 +118,6 @@ pub enum UpdateState {
     Failed(SharedString),
 }
 
-pub enum WeatherState {
-    Loading,
-    Ready { weather: Weather, updated: Instant },
-    Failed(SharedString),
-}
-
 /// Which background work a dock runs. Tests turn it all off.
 #[derive(Clone, Copy)]
 pub struct Services {
@@ -185,22 +131,15 @@ pub struct Dock {
     pub items: Vec<DockItem>,
     pub edge: Edge,
     appearance: Appearance,
-    pub location: WeatherLocation,
     /// Global shortcuts by item id.
     shortcuts: BTreeMap<String, Shortcut>,
     pub running: HashSet<String>,
     pub accessibility: Accessibility,
-    pub stats: Option<Snapshot>,
-    pub cpu_history: VecDeque<f32>,
-    pub weather: WeatherState,
-    pub history: History,
     /// The item whose card is open.
     card: Option<usize>,
     pointer_on_item: Option<usize>,
     pointer_on_card: bool,
     close_card: Option<Task<()>>,
-    /// Set after a first "Clear History" click; cleared when it expires.
-    clear_armed: Option<Task<()>>,
     screen: Screen,
     reveal: Reveal,
     /// Where the open card's window is, in screen points.
@@ -208,13 +147,9 @@ pub struct Dock {
     /// A context menu is open; the dock stays as it is until it closes,
     /// as it does while a macOS menu tracks the pointer.
     menu_open: bool,
-    pasteboard_count: isize,
-    sampler: Option<Sampler>,
     /// Whether this dock follows the real pointer (off in tests, which drive
     /// the views directly).
     live: bool,
-    /// Refreshes the forecast for `location`; replaced when it changes.
-    weather_task: Option<Task<()>>,
     /// Running plugins, by plugin id.
     plugins: BTreeMap<String, PluginState>,
     /// Saved plugin settings, by plugin id.
@@ -253,19 +188,16 @@ impl Dock {
         mut config: Config,
         platform: Rc<dyn Host>,
         screen: Screen,
-        history: History,
         services: Services,
         cx: &mut Context<Self>,
     ) -> Self {
-        config.migrate_builtins();
+        config.migrate_official();
         let discovered = discover_plugins(platform.as_ref());
-        let mut manifests = crate::builtins::manifests();
-        manifests.extend(discovered.iter().cloned());
-        let items = resolve_items(&config.items, platform.as_ref(), &manifests);
+        let items = resolve_items(&config.items, platform.as_ref(), &discovered);
         // Plugins already in the dock were agreed to when they were added.
         let mut trusted = std::mem::take(&mut config.trusted_plugins);
-        trusted.extend(config.items.iter().filter_map(|item| match item {
-            ItemConfig::Plugin { id } if !crate::builtins::contains(id) => Some(id.clone()),
+        trusted.extend(items.iter().filter_map(|item| match &item.kind {
+            ItemKind::Plugin(manifest) => Some(manifest.id.clone()),
             _ => None,
         }));
         let shortcuts = config
@@ -283,8 +215,6 @@ impl Dock {
         if services.live {
             tasks.push(every(POINTER_INTERVAL, cx, Self::poll_pointer));
             tasks.push(every(SYSTEM_INTERVAL, cx, Self::poll_system));
-            tasks.push(every(STATS_INTERVAL, cx, Self::poll_stats));
-            tasks.push(every(PASTEBOARD_INTERVAL, cx, Self::poll_pasteboard));
             tasks.push(every(PLUGIN_RELOAD_INTERVAL, cx, Self::poll_plugins));
         }
         // Stop plugin processes with the app rather than leave them behind.
@@ -294,9 +224,6 @@ impl Dock {
                 async {}
             })
         });
-        let weather_task = services
-            .live
-            .then(|| Self::weather_task(config.weather.clone(), cx));
         let automatic_update_checks = config.automatically_check_for_updates;
         let app_updates = cx.new(|cx| {
             super::updates::AppUpdates::new(
@@ -312,29 +239,20 @@ impl Dock {
             automatic_update_checks,
             running: platform.running_bundle_ids(),
             accessibility: platform.accessibility(),
-            pasteboard_count: platform.pasteboard_change_count(),
-            sampler: services.live.then(Sampler::new),
             platform,
             items,
             edge: config.edge,
             appearance: config.appearance,
-            location: config.weather,
             shortcuts,
-            stats: None,
-            cpu_history: VecDeque::new(),
-            weather: WeatherState::Loading,
-            history,
             card: None,
             pointer_on_item: None,
             pointer_on_card: false,
             close_card: None,
-            clear_armed: None,
             screen,
             menu_open: false,
             card_frame: None,
             reveal: Reveal::default(),
             live: services.live,
-            weather_task,
             plugins: BTreeMap::new(),
             plugin_settings: config.plugin_settings,
             open_plugin: None,
@@ -359,7 +277,6 @@ impl Dock {
         // Tell a plugin when its card opens and closes, whatever caused it.
         self._observe_self = Some(cx.observe_self(|this, _| {
             this.sync_open_plugin();
-            this.sync_plugin_data();
         }));
         let manifests: Vec<Manifest> = self
             .items
@@ -633,23 +550,6 @@ impl Dock {
         }
     }
 
-    /// Adds a widget the dock doesn't have yet, at the end.
-    pub fn add_widget(&mut self, widget: Widget, cx: &mut Context<Self>) -> bool {
-        let manifest = crate::builtins::manifests()
-            .into_iter()
-            .find(|manifest| manifest.id == widget.id())
-            .expect("built-in plugin");
-        self.add_plugin(manifest, cx)
-    }
-
-    /// Widgets that could still be added.
-    pub fn missing_widgets(&self) -> Vec<Widget> {
-        Widget::ALL
-            .into_iter()
-            .filter(|widget| self.index_of(&format!("plugin:{}", widget.id())).is_none())
-            .collect()
-    }
-
     // MARK: Plugins
 
     fn start_plugin(&mut self, manifest: &Manifest, cx: &mut Context<Self>) {
@@ -703,7 +603,6 @@ impl Dock {
                     logs,
                     height,
                     link: Some(link),
-                    data: HashMap::new(),
                     fingerprint,
                     _task: Some(task),
                 }
@@ -717,48 +616,27 @@ impl Dock {
                 logs,
                 height,
                 link: None,
-                data: HashMap::new(),
                 fingerprint,
                 _task: None,
             },
         };
         self.plugins.insert(manifest.id.clone(), state);
         // A restarted worker needs the current card state even if the pointer
-        // has not moved, as well as a fresh copy of every subscribed feed.
+        // has not moved.
         let open = self
             .card()
             .is_some_and(|(_, item)| item.id.as_ref() == format!("plugin:{}", manifest.id));
         if open {
             self.send_plugin(&manifest.id, &HostMessage::Card { open });
         }
-        self.sync_plugin_data();
     }
 
     fn plugin_message(&mut self, id: &str, message: PluginMessage, cx: &mut Context<Self>) {
-        let had_weather = self.wants_data(DataSource::Weather);
         let Some(state) = self.plugins.get_mut(id) else {
             return;
         };
         match message {
-            PluginMessage::Clipboard { command } => {
-                // Clipboard access is opt-in, just like the live history feed.
-                if !self.items.iter().any(|item| {
-                    matches!(&item.kind,
-                    ItemKind::Plugin(m) if m.id == id && m.data.contains(&DataSource::Clipboard))
-                }) {
-                    return;
-                }
-                match command {
-                    ClipboardCommand::ShowHistory => self.show_clipboard_history(cx),
-                    ClipboardCommand::CopyEntry { id } => self.copy_entry(id, cx),
-                    ClipboardCommand::RequestClear => self.request_clear_history(cx),
-                }
-                return;
-            }
             PluginMessage::Manifest(described) => {
-                state
-                    .data
-                    .retain(|source, _| described.data.contains(source));
                 // The running plugin's own word on its name, look and settings.
                 for item in &mut self.items {
                     if let ItemKind::Plugin(manifest) = &mut item.kind
@@ -766,9 +644,6 @@ impl Dock {
                     {
                         manifest.update(described.clone());
                     }
-                }
-                if self.live && !had_weather && self.wants_data(DataSource::Weather) {
-                    self.weather_task = Some(Self::weather_task(self.location.clone(), cx));
                 }
             }
             PluginMessage::Render { surface, tree } => {
@@ -831,7 +706,7 @@ impl Dock {
                 return;
             }
             PluginMessage::Copy { text } => {
-                self.platform.write_pasteboard(&ClipKind::Text { text });
+                self.platform.copy_text(&text);
                 return;
             }
             PluginMessage::OpenWindow { key } => {
@@ -1052,10 +927,10 @@ impl Dock {
 
     /// Installed plugins that aren't in the dock.
     pub fn available_plugins(&self) -> Vec<Manifest> {
-        crate::builtins::manifests()
-            .into_iter()
-            .chain(self.discovered.iter().cloned())
+        self.discovered
+            .iter()
             .filter(|manifest| self.index_of(&format!("plugin:{}", manifest.id)).is_none())
+            .cloned()
             .collect()
     }
 
@@ -1064,16 +939,8 @@ impl Dock {
         if self.items.len() >= MAX_ITEMS || self.index_of(&item.id).is_some() {
             return false;
         }
-        let start_weather = self.live
-            && !self.wants_data(DataSource::Weather)
-            && manifest.data.contains(&DataSource::Weather);
         self.items.push(item);
-        if !crate::builtins::contains(&manifest.id) {
-            self.trusted.insert(manifest.id.clone());
-        }
-        if start_weather {
-            self.weather_task = Some(Self::weather_task(self.location.clone(), cx));
-        }
+        self.trusted.insert(manifest.id.clone());
         self.start_plugin(&manifest, cx);
         self.items_changed(cx);
         true
@@ -1084,7 +951,20 @@ impl Dock {
     /// Whether `id` can be added without asking; plugins run with the app's
     /// access, so a new one needs the user's go-ahead once.
     pub fn is_trusted(&self, id: &str) -> bool {
-        crate::builtins::contains(id) || self.trusted.contains(id)
+        self.trusted.contains(id)
+    }
+
+    /// Whether `manifest` was installed from one of the gallery's official
+    /// plugins, made and kept up by the Sidedoor project.
+    pub fn is_official(&self, manifest: &Manifest) -> bool {
+        let Some(source) = &manifest.source else {
+            return false;
+        };
+        self.gallery.iter().any(|entry| {
+            entry.official
+                && plugin_host::Link::parse(&entry.link)
+                    .is_ok_and(|link| link.same_plugin(&source.link))
+        })
     }
 
     pub fn in_dock(&self, id: &str) -> bool {
@@ -1099,11 +979,11 @@ impl Dock {
         })
     }
 
-    /// Every plugin, in the dock or not: the built-ins, then the rest by name.
+    /// Every installed plugin, in the dock or not, by name.
     pub fn installed_plugins(&self) -> Vec<Manifest> {
-        crate::builtins::manifests()
-            .into_iter()
-            .chain(self.discovered.iter().cloned())
+        self.discovered
+            .iter()
+            .cloned()
             .map(|manifest| {
                 self.dock_manifest(&manifest.id)
                     .cloned()
@@ -1228,11 +1108,8 @@ impl Dock {
     }
 
     /// Takes a plugin out of the dock, moves its folder to the Trash and
-    /// forgets its settings. Built-ins can only be removed from the dock.
+    /// forgets its settings.
     pub fn delete_plugin(&mut self, id: &str, cx: &mut Context<Self>) -> Result<(), String> {
-        if crate::builtins::contains(id) {
-            return Err("Built-in plugins can't be deleted.".into());
-        }
         let manifest = self
             .installed_plugins()
             .into_iter()
@@ -1272,20 +1149,6 @@ impl Dock {
         }
         self.appearance = appearance;
         self.platform.set_appearance(appearance);
-        self.save_config();
-        cx.notify();
-    }
-
-    /// Shows the weather for another place, fetching it right away.
-    pub fn set_location(&mut self, location: WeatherLocation, cx: &mut Context<Self>) {
-        if location == self.location {
-            return;
-        }
-        self.location = location.clone();
-        self.weather = WeatherState::Loading;
-        if self.live {
-            self.weather_task = Some(Self::weather_task(location, cx));
-        }
         self.save_config();
         cx.notify();
     }
@@ -1361,8 +1224,8 @@ impl Dock {
         }
     }
 
-    /// What pressing an item's shortcut does: apps open, Clipboard opens its
-    /// history, other widgets show their card for a moment.
+    /// What pressing an item's shortcut does: apps open, plugins that take
+    /// clicks get one, other plugins show their card for a moment.
     pub fn trigger_shortcut(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(index) = self.index_of(id) else {
             return;
@@ -1395,7 +1258,7 @@ impl Dock {
             items: self.items.iter().map(DockItem::config).collect(),
             edge: self.edge,
             appearance: self.appearance,
-            weather: self.location.clone(),
+            weather: None,
             shortcuts: self
                 .shortcuts
                 .iter()
@@ -1420,29 +1283,7 @@ impl Dock {
         cx.notify();
     }
 
-    // MARK: Clipboard
-
-    pub fn show_clipboard_history(&mut self, cx: &mut Context<Self>) {
-        self.card = None;
-        self.pointer_on_item = None;
-        self.pointer_on_card = false;
-        cx.emit(DockEvent::OpenClipboardHistory);
-        cx.notify();
-    }
-
-    pub fn delete_entry(&mut self, id: u64, cx: &mut Context<Self>) {
-        if let Some(image) = self.history.remove(id) {
-            if let Some(file) = image {
-                std::fs::remove_file(file).ok();
-            }
-            self.save_history();
-            cx.notify();
-        }
-    }
-
-    pub fn utc_offset(&self) -> i64 {
-        self.platform.utc_offset()
-    }
+    // MARK: Files
 
     pub fn reveal_path(&self, path: &std::path::Path) {
         self.platform.reveal_in_finder(path);
@@ -1451,108 +1292,6 @@ impl Dock {
     pub fn open_path(&self, path: &std::path::Path) {
         if let Err(err) = self.platform.open(path) {
             eprintln!("sidedoor: couldn't open {}: {err}", path.display());
-        }
-    }
-
-    /// Puts a history entry back on the pasteboard and moves it to the top.
-    pub fn copy_entry(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(entry) = self.history.promote(id, clipboard::now_secs()) else {
-            return;
-        };
-        self.platform.write_pasteboard(&entry.kind);
-        // Our own write shouldn't come back as a new copy.
-        self.pasteboard_count = self.platform.pasteboard_change_count();
-        self.save_history();
-        cx.notify();
-    }
-
-    /// Clears the history on the second request within a few seconds, so a
-    /// stray click can't wipe it.
-    pub fn request_clear_history(&mut self, cx: &mut Context<Self>) {
-        if self.clear_armed.is_some() {
-            self.clear_armed = None;
-            self.clear_history(cx);
-            return;
-        }
-        self.clear_armed = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(CLEAR_CONFIRM_WINDOW).await;
-            this.update(cx, |this, cx| {
-                this.clear_armed = None;
-                cx.notify();
-            })
-            .ok();
-        }));
-        cx.notify();
-    }
-
-    pub fn is_clear_armed(&self) -> bool {
-        self.clear_armed.is_some()
-    }
-
-    fn clear_history(&mut self, cx: &mut Context<Self>) {
-        for file in self.history.clear() {
-            std::fs::remove_file(file).ok();
-        }
-        self.save_history();
-        cx.notify();
-    }
-
-    fn record(&mut self, kind: ClipKind, source: Option<String>) {
-        for file in
-            services::storage::push_history(&mut self.history, kind, source, clipboard::now_secs())
-        {
-            std::fs::remove_file(file).ok();
-        }
-        self.save_history();
-    }
-
-    fn save_history(&self) {
-        if let Err(err) = self.platform.save_history(&self.history) {
-            eprintln!("sidedoor: couldn't save clipboard history: {err}");
-        }
-    }
-
-    fn wants_data(&self, source: DataSource) -> bool {
-        self.items.iter().any(|item| {
-            matches!(&item.kind,
-            ItemKind::Plugin(manifest) if manifest.data.contains(&source))
-        })
-    }
-
-    /// Broadcasts only changed feeds, and only to plugins that requested them.
-    fn sync_plugin_data(&mut self) {
-        let mut feeds = HashMap::new();
-        for source in [
-            DataSource::Weather,
-            DataSource::Stats,
-            DataSource::Clipboard,
-        ] {
-            if self.wants_data(source) {
-                feeds.insert(source, crate::app::plugin_bridge::snapshot(self, source));
-            }
-        }
-        for item in &self.items {
-            let ItemKind::Plugin(manifest) = &item.kind else {
-                continue;
-            };
-            let Some(state) = self.plugins.get_mut(&manifest.id) else {
-                continue;
-            };
-            let Some(link) = state.link.as_mut() else {
-                continue;
-            };
-            for source in &manifest.data {
-                let Some(value) = feeds.get(source) else {
-                    continue;
-                };
-                if state.data.get(source) != Some(value) {
-                    link.send(&HostMessage::Data {
-                        source: *source,
-                        value: value.clone(),
-                    });
-                    state.data.insert(*source, value.clone());
-                }
-            }
         }
     }
 
@@ -1633,78 +1372,6 @@ impl Dock {
             cx.notify();
         }
     }
-
-    fn poll_stats(&mut self, cx: &mut Context<Self>) {
-        if !self.wants_data(DataSource::Stats) {
-            return;
-        }
-        if let Some(sampler) = &mut self.sampler {
-            self.stats = Some(sampler.sample());
-            self.cpu_history = sampler.history.clone();
-            cx.notify();
-        }
-    }
-
-    pub fn poll_pasteboard(&mut self, cx: &mut Context<Self>) {
-        if !self.wants_data(DataSource::Clipboard) {
-            return;
-        }
-        let count = self.platform.pasteboard_change_count();
-        if count == self.pasteboard_count {
-            return;
-        }
-        self.pasteboard_count = count;
-        if let Some(copied) = self
-            .platform
-            .read_pasteboard(&services::storage::image_dir())
-        {
-            self.record(copied.kind, copied.source);
-            cx.notify();
-        }
-    }
-
-    fn weather_task(location: WeatherLocation, cx: &mut Context<Self>) -> Task<()> {
-        cx.spawn(async move |this, cx| {
-            loop {
-                let wanted = this
-                    .update(cx, |this, _| this.wants_data(DataSource::Weather))
-                    .unwrap_or(false);
-                let delay = if wanted {
-                    let request = location.clone();
-                    let result = cx
-                        .background_executor()
-                        .spawn(async move { weather::fetch(&request) })
-                        .await;
-                    let delay = if result.is_ok() {
-                        WEATHER_INTERVAL
-                    } else {
-                        WEATHER_RETRY
-                    };
-                    let updated = this.update(cx, |this, cx| {
-                        this.weather = match result {
-                            Ok(weather) => WeatherState::Ready {
-                                weather,
-                                updated: Instant::now(),
-                            },
-                            // Keep the last good forecast through a failed refresh.
-                            Err(_) if matches!(this.weather, WeatherState::Ready { .. }) => return,
-                            Err(message) => WeatherState::Failed(message.into()),
-                        };
-                        cx.notify();
-                    });
-                    if updated.is_err() {
-                        break;
-                    }
-                    delay
-                } else {
-                    // Nothing shows weather yet; at launch the plugin is still
-                    // starting, so look again soon rather than in a minute.
-                    WEATHER_WAIT
-                };
-                cx.background_executor().timer(delay).await;
-            }
-        })
-    }
 }
 
 /// How many log lines each plugin keeps.
@@ -1719,17 +1386,12 @@ fn push_log(logs: &mut VecDeque<SharedString>, text: &str) {
     }
 }
 
-/// Runs `tick` on the dock every `interval` for as long as the dock exists.
-/// The plugins in the plugins folder, leaving out any that claim a
-/// built-in's id.
+/// The plugins in the plugins folder.
 fn discover_plugins(platform: &dyn Host) -> Vec<Manifest> {
-    platform
-        .plugins()
-        .into_iter()
-        .filter(|manifest| !manifest.id.starts_with("builtin."))
-        .collect()
+    platform.plugins()
 }
 
+/// Runs `tick` on the dock every `interval` for as long as the dock exists.
 fn every(
     interval: Duration,
     cx: &mut Context<Dock>,
@@ -1763,7 +1425,7 @@ fn resolve_items(
                     }
                 },
                 ItemConfig::Weather | ItemConfig::Stats | ItemConfig::Clipboard => {
-                    unreachable!("migrated above")
+                    unreachable!("migrated to plugins above")
                 }
                 ItemConfig::Plugin { id } => {
                     match plugins.iter().find(|manifest| &manifest.id == id) {

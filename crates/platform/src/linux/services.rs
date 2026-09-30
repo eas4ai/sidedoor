@@ -2,8 +2,7 @@
 
 use super::{apps, clipboard, primary_display, system, x};
 use crate::{
-    api::{Accessibility, AppInfo, Copied, LoginItem, Platform},
-    clipboard::ClipKind,
+    api::{Accessibility, AppInfo, LoginItem, Platform},
     config::Appearance,
     geometry::{Point, Rect, Screen},
 };
@@ -203,16 +202,8 @@ impl Platform for LinuxPlatform {
         system::trash(path)
     }
 
-    fn pasteboard_change_count(&self) -> isize {
-        clipboard::change_count()
-    }
-
-    fn read_pasteboard(&self, image_dir: &Path) -> Option<Copied> {
-        clipboard::read(image_dir)
-    }
-
-    fn write_pasteboard(&self, kind: &ClipKind) {
-        clipboard::write(kind);
+    fn copy_text(&self, text: &str) {
+        clipboard::copy_text(text);
     }
 
     fn notify(&self, source: &str, title: &str, body: &str) {

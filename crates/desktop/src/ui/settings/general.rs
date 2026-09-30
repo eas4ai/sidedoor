@@ -23,22 +23,6 @@ pub(super) fn general_page(
             handler.update(cx, |dock, cx| dock.set_launch_at_login(checked, cx));
         });
 
-    let count = dock.history.len();
-    let armed = dock.is_clear_armed();
-    let handler = dock_entity.clone();
-    let clear = push_button(
-        "clear-history",
-        if armed {
-            "Click Again to Clear"
-        } else {
-            "Clear History"
-        },
-        palette,
-        count > 0,
-        armed,
-        move |_, cx| handler.update(cx, |dock, cx| dock.request_clear_history(cx)),
-    );
-
     let path = services::storage::config_path();
     let shown_path = match std::env::var("HOME") {
         Ok(home) if !home.is_empty() => path.display().to_string().replacen(&home, "~", 1),
@@ -150,24 +134,6 @@ pub(super) fn general_page(
         section(
             Some("Startup"),
             vec![row("Open at login", detail, launch, palette)],
-            None,
-            palette,
-        ),
-        section(
-            Some("Clipboard"),
-            vec![row(
-                "Clipboard history",
-                Some(match count {
-                    1 => format!("1 item kept on this {}.", crate::app::host::COMPUTER_NAME).into(),
-                    count => format!(
-                        "{count} items kept on this {}.",
-                        crate::app::host::COMPUTER_NAME
-                    )
-                    .into(),
-                }),
-                clear,
-                palette,
-            )],
             None,
             palette,
         ),

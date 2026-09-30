@@ -274,96 +274,6 @@ pub(super) fn open_panel<V: gpui_kit::Render>(
     })
 }
 
-/// The Clipboard History window, while it is open, and the app to hand
-/// focus back to when it closes.
-#[derive(Default)]
-pub(super) struct HistoryWindow {
-    pub(super) handle: Option<AnyWindowHandle>,
-    pub(super) previous_app: Option<ForegroundApp>,
-}
-
-pub(super) fn open_clipboard_history(
-    dock: &Entity<Dock>,
-    state: &Rc<RefCell<HistoryWindow>>,
-    cx: &mut App,
-) -> Result<(), String> {
-    // Already open: bring it forward.
-    let existing = state.borrow().handle;
-    if let Some(handle) = existing
-        && handle
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok()
-    {
-        cx.activate(true);
-        return Ok(());
-    }
-
-    state.borrow_mut().previous_app = native::frontmost_app();
-    cx.activate(true);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            size(px(780.0), px(500.0)),
-            cx,
-        ))),
-        titlebar: Some(TitlebarOptions {
-            title: Some("Clipboard History".into()),
-            appears_transparent: crate::ui::chrome::INSET_TITLE_BAR,
-            traffic_light_position: Some(point(
-                px(18.0),
-                px(clipboard_window::TOOLBAR_HEIGHT / 2.0 - 7.0),
-            )),
-        }),
-        window_min_size: Some(size(px(620.0), px(380.0))),
-        window_background: WindowBackgroundAppearance::Transparent,
-        ..Default::default()
-    };
-    let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| ClipboardWindow::new(dock.clone(), window, cx))
-    })
-    .map_err(|err| err.to_string())?;
-    handle
-        .update(cx, |_, window, cx| {
-            Root::update(window, cx, |root, _, _| {
-                root.style()
-                    .refine(&StyleRefinement::default().bg(transparent_black()));
-            });
-            if let Some(native) = native::window_handle(window) {
-                native::add_window_material(&native);
-                if !cx.reduce_motion() {
-                    native::fade_in(&native);
-                }
-            }
-            // GPUI's application-level activation is a no-op on Windows and X11.
-            #[cfg(not(target_os = "macos"))]
-            window.activate_window();
-        })
-        .ok();
-
-    let state_for_events = state.clone();
-    cx.subscribe(&view, move |_, event, cx| match event {
-        ClipboardWindowEvent::Dismiss { .. } => {
-            let previous = {
-                let mut state = state_for_events.borrow_mut();
-                if let Some(handle) = state.handle.take() {
-                    handle
-                        .update(cx, |_, window, _| window.remove_window())
-                        .ok();
-                }
-                state.previous_app.take()
-            };
-            // Hand the keyboard back to the app the user came from, ready
-            // to paste.
-            if let Some(pid) = previous {
-                native::activate_app(pid);
-            }
-        }
-    })
-    .detach();
-    state.borrow_mut().handle = Some(handle);
-    Ok(())
-}
-
 /// Plugin windows on screen, by plugin id and window key, with the app
 /// that had focus before each opened.
 pub(super) type PluginWindows =
@@ -519,9 +429,8 @@ pub(super) fn open_settings(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let lookup: settings_window::PlaceLookup = std::sync::Arc::new(weather::search);
     let (handle, view) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| SettingsWindow::new(dock.clone(), lookup, window, cx))
+        cx.new(|cx| SettingsWindow::new(dock.clone(), window, cx))
     })
     .map_err(|err| err.to_string())?;
     handle

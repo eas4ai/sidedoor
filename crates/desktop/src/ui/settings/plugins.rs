@@ -519,6 +519,7 @@ pub fn plugins_page(
         logs: Vec<SharedString>,
         problem: Option<SharedString>,
         update: Option<UpdateState>,
+        official: bool,
     }
     let (listed, room, reduce_motion) = {
         let dock = dock_entity.read(cx);
@@ -535,6 +536,7 @@ pub fn plugins_page(
                         .unwrap_or_default(),
                     problem: state.and_then(|state| state.problem.clone()),
                     update: dock.updates.get(&manifest.id).cloned(),
+                    official: dock.is_official(&manifest),
                     manifest,
                 }
             })
@@ -557,6 +559,7 @@ pub fn plugins_page(
             plugin.in_dock,
             room,
             open,
+            plugin.official,
             plugin.problem.clone(),
             palette,
         ));
@@ -564,15 +567,6 @@ pub fn plugins_page(
             continue;
         }
         let mut details = Vec::new();
-        let builtin = crate::builtins::contains(&manifest.id);
-        if builtin {
-            details.push(row(
-                "Built-in",
-                Some("Included with Sidedoor. Its settings are in the other tabs.".into()),
-                div(),
-                palette,
-            ));
-        }
         if let Some(source) = &manifest.source {
             details.push(source_row(
                 &page,
@@ -582,9 +576,7 @@ pub fn plugins_page(
                 palette,
             ));
         }
-        if !builtin {
-            details.push(code_row(&page, manifest, palette));
-        }
+        details.push(code_row(&page, manifest, palette));
         if plugin.in_dock {
             for spec in &manifest.settings {
                 let current = plugin.values.get(&spec.key).cloned().unwrap_or(Value::Null);
@@ -605,7 +597,7 @@ pub fn plugins_page(
                 plugin.problem.clone(),
                 palette,
             ));
-        } else if !builtin {
+        } else {
             details.push(row(
                 "Not in the Dock",
                 Some("Its settings and logs show once it's in the dock.".into()),
@@ -613,9 +605,7 @@ pub fn plugins_page(
                 palette,
             ));
         }
-        if let Some(actions) = actions_row(&page, manifest, plugin.in_dock, palette) {
-            details.push(actions);
-        }
+        details.push(actions_row(&page, manifest, plugin.in_dock, palette));
         let details = div()
             .pl(px(DETAIL_INDENT))
             .flex()
@@ -835,7 +825,11 @@ fn gallery(page: &Page, palette: Palette, cx: &mut App) -> Option<AnyElement> {
                                 div()
                                     .text_size(px(text::SUBHEADLINE))
                                     .text_color(palette.secondary)
-                                    .child(entry.description.clone()),
+                                    .child(if entry.official {
+                                        format!("Official · {}", entry.description)
+                                    } else {
+                                        entry.description.clone()
+                                    }),
                             ),
                     )
                     .child(button)
@@ -854,9 +848,9 @@ fn gallery(page: &Page, palette: Palette, cx: &mut App) -> Option<AnyElement> {
 /// A plugin's icon, tinted like its dock item in Settings › Items.
 pub(crate) fn plugin_icon(manifest: &Manifest, palette: Palette) -> AnyElement {
     let fill = match manifest.id.as_str() {
-        crate::builtins::WEATHER => palette.blue,
-        crate::builtins::CLIPBOARD => palette.purple,
-        crate::builtins::STATS => palette.green,
+        "weather" => palette.blue,
+        "clipboard" => palette.purple,
+        "stats" => palette.green,
         _ => palette.orange,
     };
     icon_tile(manifest.icon_path(), fill, palette)
@@ -883,9 +877,9 @@ fn icon_tile(path: String, fill: gpui_kit::Hsla, palette: Palette) -> AnyElement
 }
 
 /// Where a plugin comes from, in a few words.
-fn origin(manifest: &Manifest) -> String {
-    if crate::builtins::contains(&manifest.id) {
-        "Built-in".into()
+fn origin(manifest: &Manifest, official: bool) -> String {
+    if official {
+        "Official".into()
     } else if let Some(source) = &manifest.source {
         format!("{} · {}", source.link.service(), source.link.label())
     } else {
@@ -894,12 +888,14 @@ fn origin(manifest: &Manifest) -> String {
 }
 
 /// A plugin's line in the list: click it for details, switch it into the dock.
+#[allow(clippy::too_many_arguments)]
 fn plugin_row(
     page: &Page,
     manifest: &Manifest,
     in_dock: bool,
     room: bool,
     open: bool,
+    official: bool,
     problem: Option<SharedString>,
     palette: Palette,
 ) -> AnyElement {
@@ -945,7 +941,7 @@ fn plugin_row(
                         )
                         .child(match problem.filter(|_| in_dock) {
                             Some(problem) => problem,
-                            None => origin(manifest).into(),
+                            None => origin(manifest, official).into(),
                         }),
                 ),
         );
@@ -1061,47 +1057,34 @@ fn code_row(page: &Page, manifest: &Manifest, palette: Palette) -> AnyElement {
 }
 
 /// Reload and Delete, on the trailing side.
-fn actions_row(
-    page: &Page,
-    manifest: &Manifest,
-    in_dock: bool,
-    palette: Palette,
-) -> Option<AnyElement> {
-    let deletable = !crate::builtins::contains(&manifest.id);
-    if !in_dock && !deletable {
-        return None;
-    }
+fn actions_row(page: &Page, manifest: &Manifest, in_dock: bool, palette: Palette) -> AnyElement {
     let (reload, delete) = (page.dock.clone(), page.dock.clone());
     let (id, doomed) = (manifest.id.clone(), manifest.clone());
-    Some(
-        div()
-            .px(px(12.0))
-            .py(px(8.0))
-            .flex()
-            .justify_end()
-            .gap(px(8.0))
-            .when(in_dock, |actions| {
-                actions.child(push_button(
-                    SharedString::from(format!("reload-plugin:{}", manifest.id)),
-                    "Reload",
-                    palette,
-                    true,
-                    false,
-                    move |_, cx| reload.update(cx, |dock, cx| dock.reload_plugin(&id, cx)),
-                ))
-            })
-            .when(deletable, |actions| {
-                actions.child(push_button(
-                    SharedString::from(format!("delete-plugin:{}", manifest.id)),
-                    "Delete…",
-                    palette,
-                    true,
-                    true,
-                    move |window, cx| confirm_delete(delete.clone(), doomed.clone(), window, cx),
-                ))
-            })
-            .into_any_element(),
-    )
+    div()
+        .px(px(12.0))
+        .py(px(8.0))
+        .flex()
+        .justify_end()
+        .gap(px(8.0))
+        .when(in_dock, |actions| {
+            actions.child(push_button(
+                SharedString::from(format!("reload-plugin:{}", manifest.id)),
+                "Reload",
+                palette,
+                true,
+                false,
+                move |_, cx| reload.update(cx, |dock, cx| dock.reload_plugin(&id, cx)),
+            ))
+        })
+        .child(push_button(
+            SharedString::from(format!("delete-plugin:{}", manifest.id)),
+            "Delete…",
+            palette,
+            true,
+            true,
+            move |window, cx| confirm_delete(delete.clone(), doomed.clone(), window, cx),
+        ))
+        .into_any_element()
 }
 
 /// A path with the home folder written as `~`.

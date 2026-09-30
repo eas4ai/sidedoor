@@ -181,9 +181,6 @@ fn complete_archives_extract_but_links_and_colliding_paths_are_rejected() {
             "Sidedoor.app/Contents/MacOS/bun",
             "Sidedoor.app/Contents/Resources/sdk/package.json",
             "Sidedoor.app/Contents/Resources/sdk/src/index.ts",
-            "Sidedoor.app/Contents/Resources/builtins/weather/index.js",
-            "Sidedoor.app/Contents/Resources/builtins/clipboard/index.js",
-            "Sidedoor.app/Contents/Resources/builtins/stats/index.js",
         ] {
             zip.start_file(name, SimpleFileOptions::default().unix_permissions(0o755))
                 .unwrap();

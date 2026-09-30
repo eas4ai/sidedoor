@@ -14,7 +14,7 @@ try {
     $Out = Join-Path $Root "target/windows-bundle"
     $App = Join-Path $Out "Sidedoor"
     if (Test-Path $App) { Remove-Item -Recurse -Force $App }
-    New-Item -ItemType Directory -Force "$App/resources/sdk", "$App/resources/builtins" | Out-Null
+    New-Item -ItemType Directory -Force "$App/resources/sdk" | Out-Null
     Copy-Item "target/x86_64-pc-windows-msvc/release/sidedoor.exe" "$App/Sidedoor.exe"
 
     # Resolve the actual executable, not a package-manager shim.
@@ -24,11 +24,6 @@ try {
         throw "This x64 package requires an x64 Windows Bun executable"
     }
     Copy-Item $Bun "$App/bun.exe"
-    foreach ($Name in @("weather", "clipboard", "stats")) {
-        New-Item -ItemType Directory -Force "$App/resources/builtins/$Name" | Out-Null
-        & $Bun build "crates/desktop/src/builtins/$Name/index.tsx" --target=bun --outfile "$App/resources/builtins/$Name/index.js"
-        if ($LASTEXITCODE -ne 0) { throw "Bundling $Name failed" }
-    }
     Copy-Item -Recurse "sdk/src" "$App/resources/sdk/src"
     Copy-Item "sdk/package.json", "sdk/tsconfig.json", "sdk/README.md" "$App/resources/sdk/"
     Copy-Item "docs/windows-testing.md" "$App/README.txt"

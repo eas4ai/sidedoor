@@ -1,5 +1,0 @@
-{
-  "extends": "../../../../../sdk/tsconfig.json",
-  "compilerOptions": { "jsxImportSource": "../../../../../sdk/src" },
-  "include": ["index.tsx"]
-}

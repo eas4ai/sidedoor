@@ -16,12 +16,10 @@ import {
   type Snapshot,
 } from "./runtime";
 import { createStorage, type Storage } from "./storage";
-import type { NativeData, DataSource } from "./data";
 import type { Child, Component, IconName, Node } from "./types";
 
 /** Messages the app sends a plugin. */
 export type HostMessage =
-  | { type: "data"; source: DataSource; value: unknown }
   | { type: "event"; handler: string; value?: unknown }
   | { type: "card"; open: boolean }
   /** The dock tile was clicked, or the item's shortcut pressed. */
@@ -38,8 +36,6 @@ export type HostMessage =
 
 /** Messages a plugin sends the app. */
 export type PluginMessage =
-  | { type: "clipboard"; action: "show_history" | "request_clear" }
-  | { type: "clipboard"; action: "copy_entry"; id: number }
   | ({ type: "manifest" } & Manifest)
   | { type: "render"; surface: string; tree: Node[] }
   | { type: "patch"; surface: string; patches: Patch[] }
@@ -74,7 +70,6 @@ export interface Bridge {
 interface Session {
   bridge: Bridge;
   cardOpen: boolean;
-  data: Partial<NativeData>;
   /** What the user saved; defaults fill the gaps. */
   saved: Record<string, unknown>;
   defaults: Record<string, unknown>;
@@ -101,7 +96,6 @@ const workerBridge: Bridge = {
 let session: Session = {
   bridge: workerBridge,
   cardOpen: false,
-  data: {},
   saved: parseJson(env.SIDEDOOR_SETTINGS, {}),
   defaults: {},
   storage: createStorage(
@@ -157,19 +151,8 @@ export function useStorage<T>(
   return [value, set];
 }
 
-/** A native live value. Declare its source in definePlugin({ data: [...] }). */
-export function useData<K extends DataSource>(source: K): NativeData[K] | null {
-  return session.data[source] ?? null;
-}
-
 /** Things a widget can ask the app to do. */
 export const sidedoor = {
-  /** Requires data: ["clipboard"]. Uses the native pasteboard and history. */
-  clipboard: {
-    showHistory: () => send({ type: "clipboard", action: "show_history" }),
-    copyEntry: (id: number) => send({ type: "clipboard", action: "copy_entry", id }),
-    requestClear: () => send({ type: "clipboard", action: "request_clear" }),
-  },
   openUrl: (url: string) => send({ type: "open_url", url }),
   open: (path: string) => send({ type: "open_path", path }),
   copy: (text: string) => send({ type: "copy", text }),
@@ -245,8 +228,6 @@ export interface PluginAction<S extends SettingDefinitions = SettingDefinitions>
 export interface PluginDefinition<S extends SettingDefinitions = SettingDefinitions> {
   /** Shown in the dock's menus and in Settings. */
   name: string;
-  /** Native live feeds this plugin reads with useData. */
-  data?: readonly DataSource[];
   /** A Lucide icon name, e.g. `"timer"`; the dock shows it until `tile` draws. */
   icon?: IconName;
   /** Card width in points; 280 by default. */
@@ -273,7 +254,6 @@ export interface PluginDefinition<S extends SettingDefinitions = SettingDefiniti
 /** What the app learns about a plugin when it starts. */
 export interface Manifest {
   name: string;
-  data: DataSource[];
   icon: string;
   width: number;
   height: number | null;
@@ -308,7 +288,6 @@ export function describe<S extends SettingDefinitions>(
   return {
     manifest: {
       name: definition.name,
-      data: [...new Set(definition.data ?? [])],
       icon: definition.icon ?? "puzzle",
       width: definition.width ?? 280,
       height: definition.height ?? null,
@@ -356,7 +335,6 @@ export function start(definition: PluginDefinition, bridge: Bridge, options: Sta
     ...session,
     bridge,
     cardOpen: false,
-    data: {},
     defaults,
     saved: options.settings ?? session.saved,
     storage: options.storage ?? session.storage,
@@ -449,11 +427,6 @@ export function start(definition: PluginDefinition, bridge: Bridge, options: Sta
           openWindows.delete(message.key);
           // Reopened, it is sent whole again.
           sent.delete(`window:${message.key}`);
-        }
-        break;
-      case "data":
-        if (manifest.data.includes(message.source)) {
-          (session.data as Record<string, unknown>)[message.source] = message.value;
         }
         break;
       case "settings":

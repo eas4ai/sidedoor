@@ -14,9 +14,11 @@ pub struct Config {
     pub edge: Edge,
     #[serde(default)]
     pub appearance: Appearance,
-    #[serde(default)]
-    pub weather: WeatherLocation,
-    /// Global shortcuts by item id ("app:com.apple.Safari", "clipboard", …),
+    /// Where the weather was for, before Weather became a plugin. Read once
+    /// to carry it over to the plugin's City setting.
+    #[serde(default, skip_serializing)]
+    pub weather: Option<LegacyLocation>,
+    /// Global shortcuts by item id ("app:com.apple.Safari", "plugin:clipboard", …),
     /// written like "ctrl-cmd-v". Missing means the defaults; an empty map
     /// means none.
     #[serde(default = "default_shortcuts")]
@@ -41,6 +43,8 @@ pub enum ItemConfig {
     App {
         bundle_id: String,
     },
+    /// Widgets from before Weather, Stats and Clipboard were plugins; read
+    /// only to carry them over to the plugins.
     Weather,
     Stats,
     Clipboard,
@@ -60,27 +64,25 @@ pub enum Appearance {
     Dark,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WeatherLocation {
+/// A place the weather was for, in configs from before Weather was a plugin.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct LegacyLocation {
     pub name: String,
-    pub latitude: f64,
-    pub longitude: f64,
 }
 
-impl Default for WeatherLocation {
-    fn default() -> Self {
-        Self {
-            name: "Aalborg".into(),
-            latitude: 57.048,
-            longitude: 9.919,
-        }
-    }
-}
+/// The official plugins that used to be part of the app, by the old names
+/// their dock items and shortcuts went by.
+const OFFICIAL: [(&str, &str); 3] = [
+    ("weather", "builtin.weather"),
+    ("clipboard", "builtin.clipboard"),
+    ("stats", "builtin.stats"),
+];
 
-/// Clipboard History from anywhere; ⌃⌘V (Ctrl+Alt+V on a PC) is rarely taken.
+/// Clipboard History from anywhere, once the Clipboard plugin is installed;
+/// ⌃⌘V (Ctrl+Alt+V on a PC) is rarely taken.
 fn default_shortcuts() -> BTreeMap<String, String> {
     BTreeMap::from([(
-        "plugin:builtin.clipboard".into(),
+        "plugin:clipboard".into(),
         if crate::shortcut::PC_KEYS {
             "ctrl-alt-v"
         } else {
@@ -134,9 +136,10 @@ const DEFAULT_APPS: &[&str] = &[
 ];
 
 impl Config {
-    /// A starter dock: up to four installed apps, then the widgets.
+    /// A starter dock: up to four installed apps. Widgets come from the
+    /// plugin gallery.
     pub fn starter(is_installed: impl Fn(&str) -> bool) -> Self {
-        let mut items: Vec<ItemConfig> = DEFAULT_APPS
+        let items: Vec<ItemConfig> = DEFAULT_APPS
             .iter()
             .filter(|id| is_installed(id))
             .take(4)
@@ -144,22 +147,11 @@ impl Config {
                 bundle_id: (*id).to_string(),
             })
             .collect();
-        items.extend([
-            ItemConfig::Plugin {
-                id: crate::builtins::WEATHER.into(),
-            },
-            ItemConfig::Plugin {
-                id: crate::builtins::CLIPBOARD.into(),
-            },
-            ItemConfig::Plugin {
-                id: crate::builtins::STATS.into(),
-            },
-        ]);
         Self {
             items,
             edge: Edge::default(),
             appearance: Appearance::default(),
-            weather: WeatherLocation::default(),
+            weather: None,
             shortcuts: default_shortcuts(),
             plugin_settings: BTreeMap::new(),
             trusted_plugins: BTreeSet::new(),
@@ -167,26 +159,43 @@ impl Config {
         }
     }
 
-    /// Upgrades old widget entries and shortcuts without changing their order,
-    /// location or user-assigned keys. Explicit new shortcut keys win.
-    pub fn migrate_builtins(&mut self) -> bool {
+    /// Points the widgets that used to be part of the app at the official
+    /// plugins that replaced them, keeping their order and shortcuts, and
+    /// hands the weather's place to the Weather plugin. The dock shows each
+    /// once its plugin is installed.
+    pub fn migrate_official(&mut self) -> bool {
         let before = self.clone();
         for item in &mut self.items {
             let id = match item {
-                ItemConfig::Weather => crate::builtins::WEATHER,
-                ItemConfig::Clipboard => crate::builtins::CLIPBOARD,
-                ItemConfig::Stats => crate::builtins::STATS,
-                _ => continue,
+                ItemConfig::Weather => "weather",
+                ItemConfig::Clipboard => "clipboard",
+                ItemConfig::Stats => "stats",
+                ItemConfig::Plugin { id } => match OFFICIAL.iter().find(|(_, old)| old == id) {
+                    Some((new, _)) => new,
+                    None => continue,
+                },
+                ItemConfig::App { .. } => continue,
             };
             *item = ItemConfig::Plugin { id: id.into() };
         }
-        for old in ["weather", "clipboard", "stats"] {
-            if let Some(shortcut) = self.shortcuts.remove(old) {
-                let id = crate::builtins::legacy_id(old).unwrap();
-                self.shortcuts
-                    .entry(format!("plugin:{id}"))
-                    .or_insert(shortcut);
+        for (id, old) in OFFICIAL {
+            for old_key in [id.to_string(), format!("plugin:{old}")] {
+                if let Some(shortcut) = self.shortcuts.remove(&old_key) {
+                    self.shortcuts
+                        .entry(format!("plugin:{id}"))
+                        .or_insert(shortcut);
+                }
             }
+            if let Some(settings) = self.plugin_settings.remove(old) {
+                self.plugin_settings.entry(id.into()).or_insert(settings);
+            }
+        }
+        if let Some(place) = self.weather.take() {
+            self.plugin_settings
+                .entry("weather".into())
+                .or_default()
+                .entry("city")
+                .or_insert(place.name.into());
         }
         *self != before
     }
@@ -197,50 +206,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_migration_preserves_order_location_and_shortcut_choices() {
+    fn old_widgets_become_the_official_plugins() {
         let mut config: Config = serde_json::from_value(serde_json::json!({
-            "items": [{"type":"stats"}, {"type":"plugin","id":"weather"}, {"type":"clipboard"}, {"type":"weather"}],
+            "items": [{"type":"stats"}, {"type":"plugin","id":"builtin.weather"}, {"type":"clipboard"}, {"type":"app","bundle_id":"a"}],
             "edge":"left", "appearance":"dark",
             "weather":{"name":"Odense","latitude":55.4,"longitude":10.4},
             "shortcuts":{"stats":"ctrl-cmd-s","clipboard":"alt-v","plugin:builtin.clipboard":"ctrl-v"}
         })).unwrap();
-        assert!(config.migrate_builtins());
+        assert!(config.migrate_official());
+        let plugin = |id: &str| ItemConfig::Plugin { id: id.into() };
         assert_eq!(
             config.items,
             [
-                ItemConfig::Plugin {
-                    id: crate::builtins::STATS.into()
-                },
-                ItemConfig::Plugin {
-                    id: "weather".into()
-                },
-                ItemConfig::Plugin {
-                    id: crate::builtins::CLIPBOARD.into()
-                },
-                ItemConfig::Plugin {
-                    id: crate::builtins::WEATHER.into()
+                plugin("stats"),
+                plugin("weather"),
+                plugin("clipboard"),
+                ItemConfig::App {
+                    bundle_id: "a".into()
                 },
             ]
         );
         assert_eq!(
             config.shortcuts,
             BTreeMap::from([
-                ("plugin:builtin.stats".into(), "ctrl-cmd-s".into()),
-                ("plugin:builtin.clipboard".into(), "ctrl-v".into()),
+                ("plugin:stats".into(), "ctrl-cmd-s".into()),
+                ("plugin:clipboard".into(), "alt-v".into()),
             ])
         );
-        assert_eq!(config.weather.name, "Odense");
+        assert_eq!(config.plugin_settings["weather"]["city"], "Odense");
         assert_eq!(config.edge, Edge::Left);
         assert_eq!(config.appearance, Appearance::Dark);
-        assert!(!config.migrate_builtins());
+        assert!(!config.migrate_official());
+        // The place isn't written back; the plugin has it now.
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("weather").is_none());
+
         let mut disabled: Config =
             serde_json::from_str(r#"{"items":[{"type":"clipboard"}],"shortcuts":{}}"#).unwrap();
-        disabled.migrate_builtins();
+        disabled.migrate_official();
         assert!(disabled.shortcuts.is_empty());
     }
 
     #[test]
-    fn starter_keeps_installed_apps_then_widgets() {
+    fn starter_keeps_installed_apps() {
         let selected = [DEFAULT_APPS[0], DEFAULT_APPS[DEFAULT_APPS.len() - 1]];
         let config = Config::starter(|id| selected.contains(&id));
         assert_eq!(
@@ -251,15 +259,6 @@ mod tests {
                 },
                 ItemConfig::App {
                     bundle_id: selected[1].into()
-                },
-                ItemConfig::Plugin {
-                    id: crate::builtins::WEATHER.into()
-                },
-                ItemConfig::Plugin {
-                    id: crate::builtins::CLIPBOARD.into()
-                },
-                ItemConfig::Plugin {
-                    id: crate::builtins::STATS.into()
                 },
             ]
         );
@@ -272,7 +271,7 @@ mod tests {
         assert_eq!(config.items.len(), 2);
         assert_eq!(config.edge, Edge::Right);
         assert_eq!(config.appearance, Appearance::System);
-        assert_eq!(config.weather, WeatherLocation::default());
+        assert_eq!(config.weather, None);
         assert_eq!(config.shortcuts, default_shortcuts());
         assert!(config.automatically_check_for_updates);
         let none: Config = serde_json::from_str(r#"{"items":[],"shortcuts":{}}"#).unwrap();

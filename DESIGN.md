@@ -1,7 +1,7 @@
 # Sidedoor design
 
-Sidedoor is a second dock that lives at the edge of the screen. It holds apps,
-a few built-in widgets and plugins, and it hides until you reach for it.
+Sidedoor is a second dock that lives at the edge of the screen. It holds apps
+and plugins, and it hides until you reach for it.
 
 This document explains what we're going for and why. The exact numbers live in
 code. `crates/desktop/src/ui/theme.rs` has colors and type, `crates/domain/src/motion.rs` has timing, and
@@ -64,8 +64,8 @@ has to look right under all of them. See [Accessibility](#accessibility).
 ### Plugins are first-class and look native
 
 Plugins are written in TSX, but they don't get a web view. The app draws their
-tree with real GPUI elements and the same Rust components the built-in widgets
-use. A plugin card should be indistinguishable from the Weather card. That's
+tree with real GPUI elements and the same Rust components every plugin uses.
+A third-party card should be indistinguishable from the official Weather card. That's
 why the SDK exposes palette tokens instead of encouraging hex colors, and why
 its `transition` prop uses the app's own curves.
 
@@ -185,7 +185,8 @@ The dock is 60 points thick, and each item gets a 52-point slot. App icons are
 with 8 points of padding at each end, centered along its edge.
 
 Cards open away from the edge with their arrow pointing at the item, 3 points
-from the dock. Built-in cards are 300 points wide, plugin cards 280 by default.
+from the dock. The official plugins' cards are 300 points wide; a plugin card
+is 280 by default.
 A plugin card with no fixed height fits its content, up to 600 points. Card
 content sits in `card_body()`, which has 14 points of horizontal and 12 of
 vertical padding. Footers go at the bottom with a separator above them.

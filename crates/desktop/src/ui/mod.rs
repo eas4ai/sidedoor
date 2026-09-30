@@ -1,6 +1,5 @@
 //! Shared desktop UI, used on macOS, Windows and Linux.
 pub(crate) mod chrome;
-pub(crate) mod clipboard;
 pub(crate) mod dock;
 pub(crate) mod image_cache;
 pub(crate) mod menu;

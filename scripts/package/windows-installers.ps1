@@ -15,7 +15,7 @@ $MsiVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
 if ([int]$Matches[1] -gt 255 -or [int]$Matches[2] -gt 255 -or [int]$Matches[3] -gt 65535) {
     throw "Version exceeds Windows Installer's 255.255.65535 limit"
 }
-foreach ($File in @("Sidedoor.exe", "bun.exe", "resources/sdk/package.json", "resources/builtins/weather/index.js", "resources/builtins/clipboard/index.js", "resources/builtins/stats/index.js")) {
+foreach ($File in @("Sidedoor.exe", "bun.exe", "resources/sdk/package.json")) {
     if (-not (Test-Path "$App/$File" -PathType Leaf)) { throw "Missing Windows payload: $File" }
 }
 # Use the same pinned WiX release locally and in CI; no global install needed.

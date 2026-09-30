@@ -1,8 +1,7 @@
 //! Composes native services, persistence and the plugin runtime for the app.
 pub use ::platform::paths::*;
-pub use ::platform::{Accessibility, AppInfo, COMPUTER_NAME, Copied, LoginItem, REVEAL_LABEL};
+pub use ::platform::{Accessibility, AppInfo, LoginItem, REVEAL_LABEL};
 use domain::{
-    clipboard::{ClipKind, History},
     config::{Appearance, Config},
     geometry::{Point, Screen},
 };
@@ -12,7 +11,6 @@ use std::path::PathBuf;
 use std::{collections::HashSet, io, path::Path, sync::Arc};
 pub trait Host: ::platform::Platform {
     fn save_config(&self, config: &Config) -> io::Result<()>;
-    fn save_history(&self, history: &History) -> io::Result<()>;
     fn plugins(&self) -> Vec<Manifest>;
     fn start_plugin(
         &self,
@@ -66,14 +64,8 @@ impl ::platform::Platform for NativeHost {
     fn trash(&self, path: &Path) -> io::Result<()> {
         self.native.trash(path)
     }
-    fn pasteboard_change_count(&self) -> isize {
-        self.native.pasteboard_change_count()
-    }
-    fn read_pasteboard(&self, image_dir: &Path) -> Option<Copied> {
-        self.native.read_pasteboard(image_dir)
-    }
-    fn write_pasteboard(&self, kind: &ClipKind) {
-        self.native.write_pasteboard(kind)
+    fn copy_text(&self, text: &str) {
+        self.native.copy_text(text)
     }
     fn notify(&self, source: &str, title: &str, body: &str) {
         self.native.notify(source, title, body)
@@ -125,9 +117,6 @@ impl Host for NativeHost {
 
     fn save_config(&self, config: &Config) -> io::Result<()> {
         services::storage::save_config(config)
-    }
-    fn save_history(&self, history: &History) -> io::Result<()> {
-        services::storage::save_history(history)
     }
     #[cfg(not(target_os = "windows"))]
     fn plugins(&self) -> Vec<plugin_host::Manifest> {
@@ -195,7 +184,6 @@ pub mod fake {
     struct Recorder {
         id: String,
         sent: Rc<RefCell<Vec<(String, HostMessage)>>>,
-        native: Option<NativePlugin>,
     }
 
     impl PluginLink for Recorder {
@@ -203,72 +191,6 @@ pub mod fake {
             self.sent
                 .borrow_mut()
                 .push((self.id.clone(), message.clone()));
-            if let Some(native) = &mut self.native {
-                native.send(message);
-            }
-        }
-    }
-
-    // Runs each built-in's real TSX and SDK against fake native services.
-    // A round trip completes before returning to GPUI's deterministic executor.
-    struct NativePlugin {
-        child: std::process::Child,
-        input: std::process::ChildStdin,
-        output: std::io::BufReader<std::process::ChildStdout>,
-        incoming: UnboundedSender<PluginMessage>,
-    }
-
-    impl NativePlugin {
-        fn start(manifest: &Manifest, incoming: UnboundedSender<PluginMessage>) -> Self {
-            use std::process::{Command, Stdio};
-            static BUN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-            let bun = BUN.get_or_init(|| {
-                plugin_host::find_bun().expect("Bun is required for the plugin UI tests")
-            });
-            let mut child = Command::new(bun)
-                .arg(plugin_host::sdk_dir().join("test/native-host.ts"))
-                .arg(manifest.dir.join(&manifest.main))
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let mut plugin = Self {
-                input: child.stdin.take().unwrap(),
-                output: std::io::BufReader::new(child.stdout.take().unwrap()),
-                child,
-                incoming,
-            };
-            plugin.receive();
-            plugin
-        }
-
-        fn receive(&mut self) {
-            use std::io::BufRead as _;
-            let mut line = String::new();
-            self.output.read_line(&mut line).unwrap();
-            let messages: Vec<PluginMessage> = serde_json::from_str(&line)
-                .unwrap_or_else(|err| panic!("TSX test host stopped: {err}: {line}"));
-            for message in messages {
-                assert!(
-                    !matches!(message, PluginMessage::Error { .. }),
-                    "{message:?}"
-                );
-                self.incoming.unbounded_send(message).unwrap();
-            }
-        }
-
-        fn send(&mut self, message: &HostMessage) {
-            use std::io::Write as _;
-            writeln!(self.input, "{}", serde_json::to_string(message).unwrap()).unwrap();
-            self.input.flush().unwrap();
-            self.receive();
-        }
-    }
-
-    impl Drop for NativePlugin {
-        fn drop(&mut self) {
-            self.child.kill().ok();
-            self.child.wait().ok();
         }
     }
 
@@ -279,8 +201,8 @@ pub mod fake {
         pub running: RefCell<HashSet<String>>,
         pub apps: RefCell<Vec<AppInfo>>,
         pub opened: RefCell<Vec<PathBuf>>,
-        pub pasteboard: RefCell<(isize, Option<Copied>)>,
-        pub written: RefCell<Vec<ClipKind>>,
+        /// Text plugins copied.
+        pub copied: RefCell<Vec<String>>,
         /// Notifications shown: source, title and body.
         pub notified: RefCell<Vec<[String; 3]>>,
         pub saved_configs: RefCell<Vec<Config>>,
@@ -341,11 +263,38 @@ pub mod fake {
                     width: 400.0,
                     height: 300.0,
                 }],
-                data: Vec::new(),
                 dir: PathBuf::from("/plugins/counter"),
                 main: PathBuf::from("index.tsx"),
                 source: None,
             }];
+            // The official plugins, as installed from the gallery.
+            fake.plugins.borrow_mut().extend(
+                [
+                    ("weather", "Weather", "cloud", Some(190.0), false),
+                    ("clipboard", "Clipboard", "clipboard", None, true),
+                    ("stats", "Stats", "cpu", Some(206.0), false),
+                ]
+                .map(|(id, name, icon, height, clickable)| Manifest {
+                    id: id.into(),
+                    name: name.into(),
+                    icon: icon.into(),
+                    width: 300.0,
+                    height,
+                    settings: Vec::new(),
+                    clickable,
+                    actions: Vec::new(),
+                    windows: Vec::new(),
+                    dir: PathBuf::from(format!("/plugins/{id}")),
+                    main: PathBuf::from("index.tsx"),
+                    source: Some(plugin_host::Source {
+                        link: plugin_host::Link::parse(&format!(
+                            "https://github.com/lassejlv/sidedoor/tree/main/plugins/{id}"
+                        ))
+                        .unwrap(),
+                        commit: "0000000".into(),
+                    }),
+                }),
+            );
             fake
         }
 
@@ -354,12 +303,6 @@ pub mod fake {
             self.plugin_inbox.borrow()[id]
                 .unbounded_send(incoming)
                 .expect("the plugin is running");
-        }
-
-        pub fn copy(&self, kind: ClipKind) {
-            let mut pasteboard = self.pasteboard.borrow_mut();
-            pasteboard.0 += 1;
-            pasteboard.1 = Some(Copied { kind, source: None });
         }
     }
 
@@ -405,14 +348,8 @@ pub mod fake {
             self.trashed.borrow_mut().push(path.to_path_buf());
             Ok(())
         }
-        fn pasteboard_change_count(&self) -> isize {
-            self.pasteboard.borrow().0
-        }
-        fn read_pasteboard(&self, _: &Path) -> Option<Copied> {
-            self.pasteboard.borrow().1.clone()
-        }
-        fn write_pasteboard(&self, kind: &ClipKind) {
-            self.written.borrow_mut().push(kind.clone());
+        fn copy_text(&self, text: &str) {
+            self.copied.borrow_mut().push(text.into());
         }
         fn notify(&self, source: &str, title: &str, body: &str) {
             self.notified
@@ -440,9 +377,6 @@ pub mod fake {
             self.saved_configs.borrow_mut().push(config.clone());
             Ok(())
         }
-        fn save_history(&self, _: &History) -> io::Result<()> {
-            Ok(())
-        }
         fn plugins(&self) -> Vec<Manifest> {
             self.slow_queries.set(self.slow_queries.get() + 1);
             self.plugins.borrow().clone()
@@ -456,8 +390,6 @@ pub mod fake {
                 .borrow_mut()
                 .push((manifest.id.clone(), settings.clone()));
             let (sender, incoming) = unbounded();
-            let native = crate::builtins::contains(&manifest.id)
-                .then(|| NativePlugin::start(manifest, sender.clone()));
             self.plugin_inbox
                 .borrow_mut()
                 .insert(manifest.id.clone(), sender);
@@ -465,7 +397,6 @@ pub mod fake {
                 link: Box::new(Recorder {
                     id: manifest.id.clone(),
                     sent: self.plugin_sent.clone(),
-                    native,
                 }),
                 incoming,
             })
@@ -481,7 +412,6 @@ pub mod fake {
                 clickable: false,
                 actions: Vec::new(),
                 windows: Vec::new(),
-                data: Vec::new(),
                 dir: PathBuf::from(format!("/plugins/{}", name.to_lowercase())),
                 main: PathBuf::from("index.tsx"),
                 source: None,
@@ -552,7 +482,6 @@ pub mod fake {
                     clickable: false,
                     actions: Vec::new(),
                     windows: Vec::new(),
-                    data: Vec::new(),
                     dir: PathBuf::from(format!("/staging/{}", source.name())),
                     main: PathBuf::from("index.tsx"),
                     source: None,

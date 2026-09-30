@@ -154,9 +154,6 @@ pub(super) fn validate_payload(root: &Path, installation: &Installation) -> Resu
         binary.join(bun_name(&installation.os)),
         resources.join("sdk/package.json"),
         resources.join("sdk/src/index.ts"),
-        resources.join("builtins/weather/index.js"),
-        resources.join("builtins/clipboard/index.js"),
-        resources.join("builtins/stats/index.js"),
     ] {
         if !file.is_file() {
             return Err(format!(

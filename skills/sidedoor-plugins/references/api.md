@@ -26,7 +26,6 @@ export default definePlugin({
   width: 280,               // card width in points, 120–480
   height: undefined,        // optional; default fits content up to 600
   settings: { … },          // see Settings
-  data: ["stats"],          // opt-in native feeds: weather, stats, clipboard
   card: ({ settings }) => …,  // hover card (required)
   tile: ({ settings }) => …,  // dock slot, ~44 pt square; default shows `icon`
   onClick: () => …,         // tile click; the item's shortcut clicks too
@@ -120,7 +119,6 @@ numeric style props (size, spacing, position, `opacity`, `rounded`,
 | `useStorage(key, initial)` | Persistent JSON state, shared by key across components |
 | `useSetting(key)` | One setting's typed value |
 | `useCardOpen()` | Whether the card is showing |
-| `useData(source)` | A native feed declared in `data`, `null` until first update |
 
 Saving the file keeps `useState`, `useRef` and store values when they're JSON
 and hook order is unchanged.
@@ -137,19 +135,16 @@ and hook order is unchanged.
 | `sidedoor.settings()` | Current settings outside render |
 | `sidedoor.storage.get(key)` / `.set(key, value)` / `.delete(key)` | Persistent JSON storage outside render |
 | `sidedoor.dataDir` | A folder for the plugin's own files |
-| `sidedoor.clipboard.copyEntry(id)` / `showHistory()` / `requestClear()` | With `data: ["clipboard"]` |
 
 `fetch`, files and timers are plain Bun.
 
-## Native data
+## System data
 
-Declared with `data: [...]` and read with `useData(...)`. Types are in
-`src/data.ts`.
-
-- `weather`: `{ location, status: "loading" | "failed" | "ready", weather?, conditionLabel?, updatedMinutes? }`.
-  `weather` has `temperature`, `high`, `low`, `condition`, `is_day` and `hours[]`.
-- `stats`: `{ cpu, memoryPercent, diskPercent, memoryUsed, memoryTotal, diskFree, history, interval }`, sampled every 2 s.
-- `clipboard`: `{ count, entries (latest 5), clearArmed }`.
+The app doesn't hand plugins system data; get it with Bun, as the official
+plugins in `plugins/` do: Weather uses `fetch` against Open-Meteo, Stats
+reads `node:os`, `vm_stat` or `/proc/meminfo` and `statfsSync("/")`, and
+Clipboard watches the pasteboard with a long-running `osascript` (JXA) on
+macOS and `wl-paste`, `xclip` or PowerShell elsewhere.
 
 ## Testing
 

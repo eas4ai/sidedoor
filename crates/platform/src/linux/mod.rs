@@ -70,11 +70,6 @@ thread_local! {
     static SCALE: Cell<Option<f64>> = const { Cell::new(None) };
     /// Grabbed keys pressed since the last pump: key code and modifier state.
     static PRESSED: RefCell<VecDeque<(u8, u16)>> = const { RefCell::new(VecDeque::new()) };
-    /// Selection replies waiting for the code that asked for them.
-    static SELECTIONS: RefCell<VecDeque<xproto::SelectionNotifyEvent>> =
-        const { RefCell::new(VecDeque::new()) };
-    /// Counts clipboard ownership changes, like `NSPasteboard.changeCount`.
-    static CLIPBOARD_CHANGES: Cell<isize> = const { Cell::new(0) };
     /// Where the pointer was at each button press anywhere on screen,
     /// while something watches for them (an open menu).
     static PRESSES: RefCell<Option<Vec<(i16, i16)>>> = const { RefCell::new(None) };
@@ -123,16 +118,6 @@ fn connect() -> Result<X, Box<dyn std::error::Error>> {
         x11rb::COPY_FROM_PARENT,
         &xproto::CreateWindowAux::new(),
     )?;
-    if xfixes {
-        use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
-        conn.xfixes_select_selection_input(
-            helper,
-            atoms.CLIPBOARD,
-            SelectionEventMask::SET_SELECTION_OWNER
-                | SelectionEventMask::SELECTION_WINDOW_DESTROY
-                | SelectionEventMask::SELECTION_CLIENT_CLOSE,
-        )?;
-    }
     conn.flush()?;
     Ok(X {
         conn,
@@ -159,12 +144,6 @@ pub fn drain_events() {
                         .borrow_mut()
                         .push_back((press.detail, u16::from(press.state)))
                 });
-            }
-            Event::XfixesSelectionNotify(_) => {
-                CLIPBOARD_CHANGES.with(|count| count.set(count.get() + 1));
-            }
-            Event::SelectionNotify(reply) => {
-                SELECTIONS.with(|queue| queue.borrow_mut().push_back(reply));
             }
             Event::XinputRawButtonPress(_) => {
                 let at = x
@@ -232,44 +211,6 @@ pub fn take_presses() -> Vec<(i16, i16)> {
 pub fn take_key_presses() -> Vec<(u8, u16)> {
     drain_events();
     PRESSED.with(|queue| queue.borrow_mut().drain(..).collect())
-}
-
-pub fn clipboard_changes() -> isize {
-    drain_events();
-    CLIPBOARD_CHANGES.with(Cell::get)
-}
-
-/// Waits briefly for the reply to a selection conversion we requested.
-pub fn wait_for_selection(
-    x: &X,
-    property: u32,
-    timeout: std::time::Duration,
-) -> Option<xproto::SelectionNotifyEvent> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        drain_events();
-        let found = SELECTIONS.with(|queue| {
-            let mut queue = queue.borrow_mut();
-            let index = queue
-                .iter()
-                .position(|reply| reply.requestor == x.helper && reply.property == property);
-            index.and_then(|index| queue.remove(index))
-        });
-        if found.is_some() {
-            return found;
-        }
-        let failed = SELECTIONS.with(|queue| {
-            let mut queue = queue.borrow_mut();
-            let index = queue
-                .iter()
-                .position(|reply| reply.requestor == x.helper && reply.property == x11rb::NONE);
-            index.and_then(|index| queue.remove(index)).is_some()
-        });
-        if failed || std::time::Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
 }
 
 static WAYLAND_DISPLAY: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();

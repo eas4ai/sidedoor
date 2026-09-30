@@ -39,7 +39,7 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace --locked
       - name: Native Windows clipboard test
-        run: cargo test -p platform --locked native_clipboard_roundtrips -- --ignored --test-threads=1
+        run: cargo test -p platform --locked native_clipboard_roundtrips_text -- --ignored --test-threads=1
       - name: Clippy
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
       - name: Package

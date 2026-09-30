@@ -10,7 +10,8 @@ publisher warning.
 
 The dock starts at the right screen edge. Its notification-area icon opens
 Settings with a left click; right-click for Settings, launch at login, Reload,
-and Quit. Clipboard History opens with **Ctrl+Alt+V**.
+and Quit. Install Weather, Stats and Clipboard from the gallery in
+**Settings › Plugins**; Clipboard History then opens with **Ctrl+Alt+V**.
 
 Please check:
 
@@ -20,8 +21,9 @@ Please check:
 - Reveal and hide the dock at the left, right, and bottom edges.
 - Hover Weather, Stats, and Clipboard; check rounded cards, arrows, text spacing,
   blur, and transitions against the Mac version.
-- Copy text, a link, an image, and a file. Open History, search, then copy an item
-  back into another app. Check that closing History restores keyboard focus.
+- Copy text and a link. Open History, search, then copy an item back into
+  another app. Check that closing History restores keyboard focus. On Windows
+  the Clipboard plugin keeps text only.
 - Drop an executable or Start-menu shortcut onto the dock and launch it.
 - Open Settings, switch light/dark/system appearance, reorder items, and restart.
 - Create a plugin, edit its TSX, and check reloads and plugin windows.
@@ -33,6 +35,6 @@ Include your Windows version, display scale, and a screenshot when reporting a
 visual issue. The Windows build and automated tests do not prove desktop visual
 or focus behavior; these checks still need a real Windows session.
 
-Settings, history, and saved clipboard images are stored in `%APPDATA%\Sidedoor`;
+Settings, plugins and their saved data are stored in `%APPDATA%\Sidedoor`;
 cached app icons are stored in `%LOCALAPPDATA%\Sidedoor\Cache`. Quit before replacing the extracted
 application folder. Keep your data folders when updating.

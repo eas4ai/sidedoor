@@ -31,10 +31,12 @@ like it shipped with the OS.
   ignores a pointer that just drifts past.
 - **App launchers.** Drag apps in, reorder them, see which are running, and
   give any item a global keyboard shortcut.
-- **Widget cards.** Hover an item to open its card. **Weather**, **Stats**
-  (CPU, memory, disk) and **Clipboard** come built in.
-- **Clipboard History.** Text and images you copy, searchable, a shortcut
-  away: <kbd>⌃</kbd><kbd>⌘</kbd><kbd>V</kbd> on a Mac,
+- **Widget cards.** Hover an item to open its card. The official
+  **Weather**, **Stats** (CPU, memory, disk) and **Clipboard** plugins are a
+  click away in the plugin gallery.
+- **Clipboard History.** With the Clipboard plugin, text, links, files and
+  images you copy, searchable, a shortcut away:
+  <kbd>⌃</kbd><kbd>⌘</kbd><kbd>V</kbd> on a Mac,
   <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>V</kbd> on Windows and Linux.
 - **Plugins in TSX.** Write your own widgets with the
   [Sidedoor SDK](sdk/README.md). They're drawn with native GPUI elements,
@@ -78,8 +80,9 @@ distribution with compatible library versions, an X11 session, and a Vulkan driv
 - **Settings:** right-click the dock and choose **Dock Settings…**, or use
   the menu bar or tray icon.
 - **Add apps:** drag them onto the dock, or use **Settings › Items**.
-- **Add widgets:** turn them on under **Settings › Plugins**.
-  **New Plugin** creates a working widget and opens its code.
+- **Add widgets:** install them from the gallery in **Settings › Plugins**,
+  then switch them on. **New Plugin** creates a working widget and opens
+  its code. The official plugins live in [`plugins/`](plugins).
 - **Where things are kept:**
 
   | Platform | Settings and plugins |
@@ -221,7 +224,7 @@ Windows installers; DEB and RPM installations use `apt-get` and `dnf` through
 installer/package manager for recovery. Linux package updates need `pkexec`
 and a desktop authentication agent.
 
-Settings, plugins, and clipboard history remain in the user data folder.
+Settings, plugins, and their saved data remain in the user data folder.
 Update logs are kept in the app's cache under `updates/last-update.log`.
 Updates trust this repository's GitHub release metadata over HTTPS; the
 checksum manifest is not an independent publisher signature. macOS verifies
@@ -240,12 +243,13 @@ crate's `sidedoor` binary.
 
 | Crate | Responsibility |
 | --- | --- |
-| [`desktop`](crates/desktop) | Startup, app state, shared GPUI views, built-in TSX plugins, icons |
-| [`domain`](crates/domain) | Pure models, config schema and migrations, clipboard rules, geometry, motion |
-| [`platform`](crates/platform) | macOS, Windows and Linux APIs, native windows, clipboard, shortcuts, tray, paths |
-| [`services`](crates/services) | Config and history storage, weather, system stats, image downloads |
+| [`desktop`](crates/desktop) | Startup, app state, shared GPUI views, icons |
+| [`domain`](crates/domain) | Pure models, config schema and migrations, geometry, motion |
+| [`platform`](crates/platform) | macOS, Windows and Linux APIs, native windows, copying text, shortcuts, tray, paths |
+| [`services`](crates/services) | Config storage, the plugin gallery, app updates, image downloads |
 | [`plugin-host`](crates/plugin-host) | Plugin manifests, protocol, discovery, installs from links, reload, Bun supervisor |
 | [`sdk`](sdk) | The TypeScript plugin SDK, a separate Bun package |
+| [`plugins`](plugins) | The official plugins and others in the gallery (`gallery.json`) |
 
 See [architecture](docs/architecture.md) for dependency rules and
 [DESIGN.md](DESIGN.md) for how it should look and feel.
@@ -257,8 +261,10 @@ cargo fmt --all --check
 cargo test --workspace --locked
 cargo clippy --workspace --locked --all-targets -- -D warnings
 cd sdk && bun test && bun run check
+cd plugins/<name> && bun test
 ```
 
-On an isolated Windows test session, CI also checks native clipboard round
-trips and launches the packaged app. The clipboard test is ignored by default
-because it replaces the session's clipboard contents.
+On an isolated Windows test session, CI also checks that copying text reaches
+the clipboard and launches the packaged app with the official Clipboard and
+Stats plugins installed. The clipboard test is ignored by default because it
+replaces the session's clipboard contents.

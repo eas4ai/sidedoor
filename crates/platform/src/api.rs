@@ -2,7 +2,6 @@
 //! model and views can run against a fake in tests.
 
 use domain::{
-    clipboard::ClipKind,
     config::Appearance,
     geometry::{Point, Screen},
 };
@@ -35,14 +34,6 @@ pub struct AppInfo {
     pub path: PathBuf,
     /// A PNG rendering of the app icon, if one could be made.
     pub icon: Option<PathBuf>,
-}
-
-/// Something new on the pasteboard.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Copied {
-    pub kind: ClipKind,
-    /// Name of the app that was frontmost when it was copied.
-    pub source: Option<String>,
 }
 
 /// System display preferences the UI honors.
@@ -88,12 +79,8 @@ pub trait Platform {
     /// Moves a file or folder to the Trash (the Recycle Bin on Windows).
     fn trash(&self, path: &Path) -> io::Result<()>;
 
-    /// Increments whenever anything is copied.
-    fn pasteboard_change_count(&self) -> isize;
-    /// Reads the pasteboard, skipping content marked private or transient.
-    /// Copied images are saved into `image_dir`.
-    fn read_pasteboard(&self, image_dir: &Path) -> Option<Copied>;
-    fn write_pasteboard(&self, kind: &ClipKind);
+    /// Puts `text` on the pasteboard, for a plugin's `sidedoor.copy`.
+    fn copy_text(&self, text: &str);
 
     /// Shows a notification in Notification Center; `source` names the
     /// plugin that sent it.

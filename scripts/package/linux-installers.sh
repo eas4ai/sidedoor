@@ -17,7 +17,7 @@ printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\
 # Both package managers sort prereleases before the corresponding stable version.
 PACKAGE_VERSION=$(printf '%s' "${VERSION%%+*}" | sed 's/-/~/')
 PAYLOAD="$OUT/Sidedoor-linux-$ARCH"
-for file in sidedoor bun resources/sdk/package.json resources/builtins/weather/index.js resources/builtins/clipboard/index.js resources/builtins/stats/index.js; do
+for file in sidedoor bun resources/sdk/package.json; do
     [ -f "$PAYLOAD/$file" ] || { echo "Missing Linux payload: $file" >&2; exit 1; }
 done
 WORK=$(mktemp -d "$OUT/linux-packages.XXXXXX")

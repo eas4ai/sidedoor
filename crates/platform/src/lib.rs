@@ -1,5 +1,5 @@
 //! Operating-system integration and native window presentation.
-use domain::{clipboard, config, geometry, motion, shortcut};
+use domain::{config, geometry, motion, shortcut};
 pub mod api;
 pub use api::*;
 pub mod paths;

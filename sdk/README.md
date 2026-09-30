@@ -190,8 +190,8 @@ Give a clickable `div` that shows only an icon a `label`, such as
 
 ## Native components
 
-These are drawn by the app's own Rust code, so they match the built-in
-widgets. They also take style props, which are applied on top.
+These are drawn by the app's own Rust code, so they match the rest of the
+app. They also take style props, which are applied on top.
 
 | Component | Props |
 | --- | --- |
@@ -399,38 +399,15 @@ is open), `window` (a key, and whether it opened or closed), `click`,
 `action` (a key from `actions`), `settings`, and `resync` if a patch
 doesn't fit its copy of the tree.
 
-## Built-in plugins and native data
+## Official plugins
 
-Weather, Stats, and Clipboard are ordinary `definePlugin` plugins in
-`crates/desktop/src/builtins/`. They ship with Sidedoor and run in the same supervisor as user
-plugins. The app bundles Bun, so an installed app does not need a separate Bun
-installation. Existing widget entries and their shortcuts migrate automatically.
-
-Plugins can subscribe to the native services with `data` and read the current
-value with `useData`. A value is `null` until the first update; updates rerender
-the plugin automatically. Only changed values are sent.
-
-```tsx
-import { Card, Text, definePlugin, useData } from "@sidedoor/sdk";
-
-export default definePlugin({
-  name: "CPU",
-  data: ["stats"],
-  card: () => {
-    const stats = useData("stats");
-    return <Card><Text>{stats ? `${Math.round(stats.cpu)}%` : "Loading…"}</Text></Card>;
-  },
-});
-```
-
-- `weather`: the location selected in Sidedoor, loading/failure state, conditions,
-  and hourly forecast.
-- `stats`: CPU and memory percentages, storage usage, formatted capacities, and
-  CPU history. Rust samples these every two seconds.
-- `clipboard`: the total count, five latest entries, and clear-confirmation state.
-  Declaring this feed also enables `sidedoor.clipboard.copyEntry(id)`,
-  `showHistory()`, and `requestClear()`. Clearing retains the native two-click
-  confirmation. The full searchable history window remains native.
+Weather, Stats and Clipboard are official plugins in
+[`plugins/`](../plugins), installed from the gallery in **Settings › Plugins**
+like any other. The app has no data of its own to give them: each gets its
+own with Bun. Weather calls Open-Meteo with `fetch`, Stats reads `node:os`,
+`vm_stat` or `/proc/meminfo` and the startup disk, and Clipboard watches the
+clipboard with the system's own tools and keeps its history in `useStorage`.
+They're good examples of a plugin that talks to the system without help.
 
 `NumberText` eases numeric labels on the native animation clock. `Meter` accepts
 `animated`, `value_number`, and `value_suffix` for the same stats animations.
@@ -440,6 +417,6 @@ Tile nodes can opt into hover scaling with `magnify`; `div` supports
 respects Reduce Motion.
 
 For development, run `bun install --frozen-lockfile`, `bun run check`, and
-`bun test` from `sdk/`, then `cargo test --workspace --locked` from the repository root.
-The Rust UI tests use Bun to render the actual built-in TSX against fake native
-services. `scripts/package/macos.sh` packages the runtime and compiles the built-ins.
+`bun test` from `sdk/`, `bun test` in each plugin under `plugins/`, then
+`cargo test --workspace --locked` from the repository root.
+`scripts/package/macos.sh` packages the runtime and the SDK.

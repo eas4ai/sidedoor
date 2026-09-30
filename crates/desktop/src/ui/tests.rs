@@ -5,10 +5,8 @@ use ::platform::Platform as _;
 
 use crate::app::dock::{Dock, InstallState, Services, UpdateState};
 use crate::app::host::{Host, LoginItem, fake::FakePlatform};
-use crate::ui::clipboard::{ClipboardWindow, ClipboardWindowEvent};
 use crate::ui::dock::{CardChrome, CardView, DockView};
 use crate::ui::settings::{SettingsEvent, SettingsWindow, Tab};
-use domain::clipboard::{ClipKind, History};
 use domain::config::{Appearance, Config, ItemConfig};
 use domain::geometry::{self, Edge, Point};
 use gpui_kit::{
@@ -18,7 +16,6 @@ use gpui_kit::{
     point, px, size, test::TestWindowExt as _,
 };
 use plugin_host::{HostMessage, PluginMessage};
-use services::weather::Place;
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
 struct Harness {
@@ -60,16 +57,7 @@ fn setup(cx: &mut TestAppContext, items: Vec<ItemConfig>) -> Harness {
 
     cx.update(|cx| {
         gpui_kit::init(cx);
-        let dock = cx.new(|cx| {
-            Dock::new(
-                config,
-                shared,
-                screen,
-                History::default(),
-                Services { live: false },
-                cx,
-            )
-        });
+        let dock = cx.new(|cx| Dock::new(config, shared, screen, Services { live: false }, cx));
         dock.update(cx, |dock, cx| dock.start_plugins(cx));
         let frame = dock.read(cx).frame();
         let (dock_window, _) = gpui_kit::open_window(
@@ -172,16 +160,16 @@ fn hovering_an_item_opens_its_card_until_the_pointer_leaves(cx: &mut TestAppCont
 
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("plugin:builtin.stats", cx);
+        window.hover("plugin:stats", cx);
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:builtin.stats"));
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:stats"));
 
     // Leaving the item starts a short grace period, then the card closes.
     cx.update_window(h.dock_window, |_, window, cx| move_to_padding(window, cx))
         .unwrap();
-    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:builtin.stats"));
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:stats"));
     cx.executor().advance_clock(Duration::from_millis(300));
     cx.run_until_parked();
     assert_eq!(h.open_card_id(cx), None);
@@ -224,7 +212,7 @@ fn moving_onto_the_card_keeps_it_open(cx: &mut TestAppContext) {
     h.reveal(cx);
     cx.update_window(h.dock_window, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("plugin:builtin.clipboard", cx);
+        window.hover("plugin:clipboard", cx);
         move_to_padding(window, cx);
     })
     .unwrap();
@@ -237,26 +225,7 @@ fn moving_onto_the_card_keeps_it_open(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(
-        h.open_card_id(cx).as_deref(),
-        Some("plugin:builtin.clipboard")
-    );
-}
-
-#[gpui_kit::test]
-fn an_armed_clear_expires(cx: &mut TestAppContext) {
-    let h = setup(cx, vec![ItemConfig::Clipboard]);
-    h.platform.copy(ClipKind::from_text("keep me".into()));
-    cx.update(|cx| {
-        h.dock.update(cx, |dock, cx| {
-            dock.poll_pasteboard(cx);
-            dock.request_clear_history(cx);
-        })
-    });
-    cx.executor().advance_clock(Duration::from_secs(4));
-    cx.run_until_parked();
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.request_clear_history(cx)));
-    assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 1);
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:clipboard"));
 }
 
 #[gpui_kit::test]
@@ -449,13 +418,13 @@ fn dropped_apps_are_added_once_and_others_ignored(cx: &mut TestAppContext) {
         [
             "app:com.example.alpha",
             "app:com.example.delta",
-            "plugin:builtin.weather"
+            "plugin:weather"
         ]
     );
 
     cx.update(|cx| {
         h.dock
-            .update(cx, |dock, cx| dock.remove("plugin:builtin.weather", cx))
+            .update(cx, |dock, cx| dock.remove("plugin:weather", cx))
     });
     assert_eq!(
         h.item_ids(cx),
@@ -464,281 +433,10 @@ fn dropped_apps_are_added_once_and_others_ignored(cx: &mut TestAppContext) {
     assert_eq!(h.platform.saved_configs.borrow().len(), 2);
 }
 
-#[gpui_kit::test]
-fn copies_show_in_the_card_and_click_to_copy_back(cx: &mut TestAppContext) {
-    let h = setup(cx, vec![ItemConfig::Clipboard]);
-    h.platform.copy(ClipKind::from_text("Standup notes".into()));
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-    h.platform.copy(ClipKind::from_text(
-        "https://github.com/zed-industries".into(),
-    ));
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-    // Nothing new on the pasteboard: nothing recorded.
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-
-    let (newest, oldest) = cx.update(|cx| {
-        let history = &h.dock.read(cx).history;
-        assert_eq!(history.len(), 2);
-        (history.entries[0].id, history.entries[1].id)
-    });
-
-    cx.run_until_parked();
-    h.reveal(cx);
-    cx.update_window(h.dock_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.hover("plugin:builtin.clipboard", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(h.card_window, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(
-            window
-                .find(gpui_kit::SharedString::from(format!(
-                    "plugin:builtin.clipboard:clip:{newest}"
-                )))
-                .visible()
-        );
-        window.click(
-            gpui_kit::SharedString::from(format!("plugin:builtin.clipboard:clip:{oldest}")),
-            cx,
-        );
-    })
-    .unwrap();
-    cx.run_until_parked();
-
-    assert_eq!(
-        *h.platform.written.borrow(),
-        vec![ClipKind::Text {
-            text: "Standup notes".into()
-        }]
-    );
-    let top = cx.update(|cx| h.dock.read(cx).history.entries[0].id);
-    assert_eq!(top, oldest);
-
-    // One click only arms Clear History; the second clears.
-    cx.update_window(h.card_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("plugin:builtin.clipboard:clear-history", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 2);
-    cx.update_window(h.card_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("plugin:builtin.clipboard:clear-history", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 0);
-}
-
-// MARK: Clipboard History window
-
-struct HistoryHarness {
-    platform: Rc<FakePlatform>,
-    dock: Entity<Dock>,
-    window: AnyWindowHandle,
-    view: Entity<ClipboardWindow>,
-    events: Rc<std::cell::RefCell<Vec<ClipboardWindowEvent>>>,
-}
-
-fn open_history(cx: &mut TestAppContext, copies: &[&str]) -> HistoryHarness {
-    let h = setup(cx, vec![ItemConfig::Clipboard]);
-    for copy in copies {
-        h.platform.copy(ClipKind::from_text((*copy).into()));
-        cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-    }
-    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let (window, view) = cx.update(|cx| {
-        let (window, view) = gpui_kit::open_window(options(780.0, 500.0), cx, |window, cx| {
-            cx.new(|cx| ClipboardWindow::new(h.dock.clone(), window, cx))
-        })
-        .unwrap();
-        let log = events.clone();
-        cx.subscribe(&view, move |_, event: &ClipboardWindowEvent, _| {
-            log.borrow_mut().push(*event);
-        })
-        .detach();
-        (window, view)
-    });
-    HistoryHarness {
-        platform: h.platform,
-        dock: h.dock,
-        window,
-        view,
-        events,
-    }
-}
-
-impl HistoryHarness {
-    fn selected_title(&self, cx: &mut TestAppContext) -> Option<String> {
-        cx.update(|cx| {
-            let id = self.view.read(cx).selected()?;
-            let dock = self.dock.read(cx);
-            let entry = dock.history.entries.iter().find(|entry| entry.id == id)?;
-            Some(entry.kind.title())
-        })
-    }
-
-    fn press(&self, cx: &mut TestAppContext, key: &str) {
-        let key = if domain::shortcut::PC_KEYS {
-            key.replace("cmd-", "ctrl-")
-        } else {
-            key.to_owned()
-        };
-        cx.update_window(self.window, |_, window, cx| {
-            window.render_frame(cx);
-            window.press(&key, cx);
-        })
-        .unwrap();
-    }
-}
-
-#[gpui_kit::test]
-fn history_window_filters_as_you_type_and_moves_with_arrows(cx: &mut TestAppContext) {
-    let h = open_history(cx, &["alpha notes", "beta link list", "gamma notes"]);
-    // Newest first, and the newest is selected.
-    assert_eq!(h.selected_title(cx).as_deref(), Some("gamma notes"));
-
-    h.press(cx, "down");
-    assert_eq!(h.selected_title(cx).as_deref(), Some("beta link list"));
-    h.press(cx, "up");
-    h.press(cx, "up");
-    assert_eq!(h.selected_title(cx).as_deref(), Some("gamma notes"));
-
-    cx.update_window(h.window, |_, window, cx| window.input("notes", cx))
-        .unwrap();
-    // The search field reports the change once that update has finished.
-    cx.update_window(h.window, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find(("history-row", 2u64)).is_none());
-        assert!(window.find(("history-row", 1u64)).visible());
-    })
-    .unwrap();
-    cx.run_until_parked();
-    h.press(cx, "down");
-    assert_eq!(h.selected_title(cx).as_deref(), Some("alpha notes"));
-
-    // Escape clears the search first, then closes.
-    h.press(cx, "escape");
-    assert!(h.events.borrow().is_empty());
-    h.press(cx, "escape");
-    assert_eq!(
-        *h.events.borrow(),
-        vec![ClipboardWindowEvent::Dismiss { copied: false }]
-    );
-}
-
-#[gpui_kit::test]
-fn history_window_copies_with_return_and_deletes_with_cmd_backspace(cx: &mut TestAppContext) {
-    let h = open_history(cx, &["first", "second", "third"]);
-    h.press(cx, "down");
-    h.press(cx, "cmd-backspace");
-    assert_eq!(cx.update(|cx| h.dock.read(cx).history.len()), 2);
-    // The next entry down takes the selection.
-    assert_eq!(h.selected_title(cx).as_deref(), Some("first"));
-
-    h.press(cx, "enter");
-    assert_eq!(
-        *h.platform.written.borrow(),
-        vec![ClipKind::Text {
-            text: "first".into()
-        }]
-    );
-    assert_eq!(
-        *h.events.borrow(),
-        vec![ClipboardWindowEvent::Dismiss { copied: true }]
-    );
-}
-
-#[gpui_kit::test]
-fn history_window_filter_segments_narrow_by_type(cx: &mut TestAppContext) {
-    let h = open_history(cx, &["plain words", "https://example.com/page"]);
-    cx.update_window(h.window, |_, window, cx| {
-        window.render_frame(cx);
-        // Filters: All, Text, Links, Images, Files.
-        window.click(("filter", 2usize), cx);
-        window.render_frame(cx);
-        assert!(window.try_find(("history-row", 1u64)).is_none());
-        assert!(window.find(("history-row", 2u64)).visible());
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(
-        h.selected_title(cx).as_deref(),
-        Some("https://example.com/page")
-    );
-}
-
-#[gpui_kit::test]
-fn image_previews_fit_their_frame(cx: &mut TestAppContext) {
-    let h = open_history(cx, &[]);
-    h.platform.copy(ClipKind::Image {
-        path: "/tmp/sidedoor-missing.png".into(),
-        width: 512,
-        height: 512,
-    });
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-    cx.update_window(h.window, |_, window, cx| {
-        window.render_frame(cx);
-        let frame = window.find("preview-frame").bounds();
-        let image = window.find("preview-image").bounds();
-        assert!(image.size.height <= frame.size.height);
-        assert!(image.size.width <= frame.size.width);
-        // Square in, square out, centered in the frame.
-        assert_eq!(image.size.width, image.size.height);
-        let center = |b: gpui_kit::Bounds<gpui_kit::Pixels>| b.center();
-        assert!((center(image).y - center(frame).y).abs() < px(1.0));
-    })
-    .unwrap();
-    cx.run_until_parked();
-}
-
-#[gpui_kit::test]
-fn show_all_opens_the_history_window(cx: &mut TestAppContext) {
-    let h = setup(cx, vec![ItemConfig::Clipboard]);
-    h.platform.copy(ClipKind::from_text("hello".into()));
-    cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-    let opened = Rc::new(std::cell::Cell::new(0));
-    let count = opened.clone();
-    cx.update(|cx| {
-        cx.subscribe(&h.dock, move |_, event: &crate::app::dock::DockEvent, _| {
-            if *event == crate::app::dock::DockEvent::OpenClipboardHistory {
-                count.set(count.get() + 1);
-            }
-        })
-        .detach();
-    });
-    cx.run_until_parked();
-    h.reveal(cx);
-    cx.update_window(h.dock_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.hover("plugin:builtin.clipboard", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(h.card_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("plugin:builtin.clipboard:show-all-history", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(opened.get(), 1);
-    // Clicking the clipboard tile itself opens it too.
-    cx.update_window(h.dock_window, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("plugin:builtin.clipboard", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    assert_eq!(opened.get(), 2);
-}
-
 // MARK: Shortcuts
 
 #[gpui_kit::test]
-fn shortcuts_open_apps_history_and_peek_at_widgets(cx: &mut TestAppContext) {
+fn shortcuts_open_apps_click_plugins_and_peek_at_the_rest(cx: &mut TestAppContext) {
     let h = setup(
         cx,
         vec![
@@ -747,17 +445,6 @@ fn shortcuts_open_apps_history_and_peek_at_widgets(cx: &mut TestAppContext) {
             ItemConfig::Clipboard,
         ],
     );
-    let opened = Rc::new(std::cell::Cell::new(0));
-    let count = opened.clone();
-    cx.update(|cx| {
-        cx.subscribe(&h.dock, move |_, event: &crate::app::dock::DockEvent, _| {
-            if *event == crate::app::dock::DockEvent::OpenClipboardHistory {
-                count.set(count.get() + 1);
-            }
-        })
-        .detach();
-    });
-
     cx.update(|cx| {
         h.dock.update(cx, |dock, cx| {
             dock.trigger_shortcut("app:com.example.alpha", cx)
@@ -769,25 +456,21 @@ fn shortcuts_open_apps_history_and_peek_at_widgets(cx: &mut TestAppContext) {
     );
 
     cx.update(|cx| {
-        h.dock.update(cx, |dock, cx| {
-            dock.trigger_shortcut("plugin:builtin.clipboard", cx)
-        })
+        h.dock
+            .update(cx, |dock, cx| dock.trigger_shortcut("plugin:clipboard", cx))
     });
     cx.run_until_parked();
-    assert_eq!(opened.get(), 1);
+    // Clipboard takes clicks, so its shortcut is one: it opens its history.
+    assert_eq!(sent(&h, "clipboard").last(), Some(&HostMessage::Click));
 
-    // A widget shortcut shows the dock with that widget's card.
+    // Other plugins' shortcuts show the dock with their card.
     assert!(!cx.update(|cx| h.dock.read(cx).is_shown()));
     cx.update(|cx| {
-        h.dock.update(cx, |dock, cx| {
-            dock.trigger_shortcut("plugin:builtin.weather", cx)
-        })
+        h.dock
+            .update(cx, |dock, cx| dock.trigger_shortcut("plugin:weather", cx))
     });
     assert!(cx.update(|cx| h.dock.read(cx).is_shown()));
-    assert_eq!(
-        h.open_card_id(cx).as_deref(),
-        Some("plugin:builtin.weather")
-    );
+    assert_eq!(h.open_card_id(cx).as_deref(), Some("plugin:weather"));
 }
 
 #[gpui_kit::test]
@@ -928,33 +611,13 @@ struct SettingsHarness {
     events: Rc<std::cell::RefCell<Vec<SettingsEvent>>>,
 }
 
-fn place(name: &str, region: &str, latitude: f64) -> Place {
-    Place {
-        name: name.into(),
-        latitude,
-        longitude: 10.0,
-        region: Some(region.into()),
-        country: Some("Denmark".into()),
-    }
-}
-
 fn open_settings(cx: &mut TestAppContext, items: Vec<ItemConfig>) -> SettingsHarness {
     let h = setup(cx, items);
     let events = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let lookup: crate::ui::settings::PlaceLookup = std::sync::Arc::new(|query: &str| {
-        if query.eq_ignore_ascii_case("aal") {
-            Ok(vec![
-                place("Aalborg", "North Denmark", 57.05),
-                place("Aalestrup", "North Denmark", 56.69),
-            ])
-        } else {
-            Ok(Vec::new())
-        }
-    });
     let (window, view) = cx.update(|cx| {
         let (width, height) = crate::ui::settings::WINDOW_SIZE;
         let (window, view) = gpui_kit::open_window(options(width, height), cx, |window, cx| {
-            cx.new(|cx| SettingsWindow::new(h.dock.clone(), lookup, window, cx))
+            cx.new(|cx| SettingsWindow::new(h.dock.clone(), window, cx))
         })
         .unwrap();
         let log = events.clone();
@@ -1048,8 +711,6 @@ fn settings_tabs_switch_by_click_and_command_number(cx: &mut TestAppContext) {
     assert_eq!(h.tab(cx), Tab::Items);
     h.press(cx, "cmd-4");
     assert_eq!(h.tab(cx), Tab::Plugins);
-    h.press(cx, "cmd-5");
-    assert_eq!(h.tab(cx), Tab::Weather);
     h.press(cx, "cmd-2");
     assert_eq!(h.tab(cx), Tab::Dock);
     assert!(h.events.borrow().is_empty());
@@ -1075,25 +736,6 @@ fn settings_pages_draw_without_asking_the_system(cx: &mut TestAppContext) {
     // lists the plugins folder; both come from the last check, not from a
     // system call per frame.
     assert_eq!(h.platform.slow_queries.get(), before);
-}
-
-#[gpui_kit::test]
-fn builtins_can_be_added_from_plugins_and_removed_like_other_items(cx: &mut TestAppContext) {
-    let h = open_settings(cx, vec![]);
-    h.press(cx, "cmd-4");
-    h.click(cx, "plugin-dock:builtin.clipboard");
-    cx.run_until_parked();
-    assert_eq!(h.item_ids(cx), ["plugin:builtin.clipboard"]);
-    cx.update(|cx| {
-        let dock = h.dock.read(cx);
-        let state = dock.plugin(crate::builtins::CLIPBOARD).unwrap();
-        assert!(state.problem.is_none());
-        assert!(state.tile.is_some() && state.card.is_some());
-    });
-    h.press(cx, "cmd-3");
-    h.click(cx, "remove:plugin:builtin.clipboard");
-    assert!(h.item_ids(cx).is_empty());
-    assert!(cx.update(|cx| h.dock.read(cx).plugin(crate::builtins::CLIPBOARD).is_none()));
 }
 
 #[gpui_kit::test]
@@ -1327,33 +969,29 @@ fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
     );
     h.press(cx, "cmd-3");
     h.click(cx, "remove:app:com.example.beta");
-    assert_eq!(
-        h.item_ids(cx),
-        ["app:com.example.alpha", "plugin:builtin.weather"]
-    );
+    assert_eq!(h.item_ids(cx), ["app:com.example.alpha", "plugin:weather"]);
 
-    // Only missing widgets are offered.
+    // Only plugins that aren't in the dock yet are offered.
     cx.update_window(h.window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find("add-widget:Weather").is_none());
+        assert!(window.try_find("add-plugin:weather").is_none());
     })
     .unwrap();
     cx.run_until_parked();
-    h.click(cx, "add-widget:Stats");
+    h.click(cx, "add-plugin:stats");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Add Plugin");
+    cx.run_until_parked();
     assert_eq!(
         h.item_ids(cx),
-        [
-            "app:com.example.alpha",
-            "plugin:builtin.weather",
-            "plugin:builtin.stats"
-        ]
+        ["app:com.example.alpha", "plugin:weather", "plugin:stats"]
     );
 
     cx.update_window(h.window, |_, window, cx| {
         window.render_frame(cx);
         window.drag_to(
             "item-row:app:com.example.alpha",
-            "item-row:plugin:builtin.stats",
+            "item-row:plugin:stats",
             cx,
         );
     })
@@ -1361,69 +999,19 @@ fn item_settings_remove_add_and_reorder(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         h.item_ids(cx),
-        [
-            "plugin:builtin.weather",
-            "plugin:builtin.stats",
-            "app:com.example.alpha"
-        ]
+        ["plugin:weather", "plugin:stats", "app:com.example.alpha"]
     );
     let saved = h.platform.saved_configs.borrow();
     assert_eq!(
         saved.last().map(|config| config.items.clone()),
         Some(vec![
             ItemConfig::Plugin {
-                id: crate::builtins::WEATHER.into()
+                id: "weather".into()
             },
-            ItemConfig::Plugin {
-                id: crate::builtins::STATS.into()
-            },
+            ItemConfig::Plugin { id: "stats".into() },
             app("com.example.alpha")
         ])
     );
-}
-
-#[gpui_kit::test]
-fn weather_settings_search_and_choose_a_place(cx: &mut TestAppContext) {
-    let h = open_settings(cx, vec![ItemConfig::Weather]);
-    h.press(cx, "cmd-5");
-    cx.update_window(h.window, |_, window, cx| {
-        h.view.update(cx, |view, cx| view.focus_city(window, cx));
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(h.window, |_, window, cx| window.input("Aal", cx))
-        .unwrap();
-    // Nothing is looked up until typing pauses.
-    cx.update_window(h.window, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find(("place", 0usize)).is_none());
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(350));
-    cx.run_until_parked();
-
-    h.click(cx, ("place", 0usize));
-    cx.update(|cx| {
-        let dock = h.dock.read(cx);
-        assert_eq!(dock.location.name, "Aalborg");
-        assert_eq!(dock.location.latitude, 57.05);
-    });
-    assert_eq!(
-        h.platform
-            .saved_configs
-            .borrow()
-            .last()
-            .map(|config| config.weather.name.clone()),
-        Some("Aalborg".into())
-    );
-    // The search resets once a place is chosen.
-    cx.update_window(h.window, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find(("place", 0usize)).is_none());
-    })
-    .unwrap();
-    cx.run_until_parked();
 }
 
 // MARK: Plugins
@@ -1438,83 +1026,6 @@ fn render(surface: &str, tree: serde_json::Value) -> PluginMessage {
         surface: surface.into(),
         tree: serde_json::from_value(tree).unwrap(),
     }
-}
-
-#[gpui_kit::test]
-fn builtins_keep_card_sizes_and_receive_only_their_requested_data(cx: &mut TestAppContext) {
-    use plugin_host::DataSource;
-    let h = setup(
-        cx,
-        vec![
-            ItemConfig::Weather,
-            ItemConfig::Stats,
-            ItemConfig::Clipboard,
-            ItemConfig::Plugin {
-                id: "counter".into(),
-            },
-        ],
-    );
-    cx.run_until_parked();
-    for (id, source) in [
-        (crate::builtins::WEATHER, DataSource::Weather),
-        (crate::builtins::STATS, DataSource::Stats),
-        (crate::builtins::CLIPBOARD, DataSource::Clipboard),
-    ] {
-        let messages = sent(&h, id);
-        assert!(messages.iter().any(
-            |message| matches!(message, HostMessage::Data { source: got, .. } if *got == source)
-        ));
-        assert!(!messages.iter().any(
-            |message| matches!(message, HostMessage::Data { source: got, .. } if *got != source)
-        ));
-    }
-    assert!(
-        !sent(&h, "counter")
-            .iter()
-            .any(|message| matches!(message, HostMessage::Data { .. }))
-    );
-    cx.update(|cx| {
-        let dock = h.dock.read(cx);
-        assert_eq!(
-            crate::ui::dock::card_size(&dock.items[0], dock, |_| 0.0),
-            (300.0, 190.0)
-        );
-        assert_eq!(
-            crate::ui::dock::card_size(&dock.items[1], dock, |_| 0.0),
-            (300.0, 206.0)
-        );
-    });
-    for index in 0..7 {
-        h.platform
-            .copy(ClipKind::from_text(format!("Copy {index}")));
-        cx.update(|cx| h.dock.update(cx, |dock, cx| dock.poll_pasteboard(cx)));
-    }
-    cx.run_until_parked();
-    open_plugin_card(&h, cx, "plugin:builtin.clipboard");
-    cx.run_until_parked();
-    cx.update(|cx| {
-        let dock = h.dock.read(cx);
-        assert_eq!(
-            dock.plugin(crate::builtins::CLIPBOARD).unwrap().height,
-            Some(322.0)
-        );
-        assert_eq!(
-            crate::ui::dock::card_size(&dock.items[2], dock, |_| 0.0),
-            (300.0, 322.0)
-        );
-    });
-    // Model notifications and rendering must not resend an unchanged feed.
-    let before = sent(&h, crate::builtins::CLIPBOARD)
-        .iter()
-        .filter(|m| matches!(m, HostMessage::Data { .. }))
-        .count();
-    cx.update(|cx| h.dock.update(cx, |_, cx| cx.notify()));
-    cx.run_until_parked();
-    let after = sent(&h, crate::builtins::CLIPBOARD)
-        .iter()
-        .filter(|m| matches!(m, HostMessage::Data { .. }))
-        .count();
-    assert_eq!(before, after);
 }
 
 /// Events the host sent to plugin `id`, as (handler, value).
@@ -1921,12 +1432,12 @@ fn plugins_show_their_problems_and_ask_before_being_added(cx: &mut TestAppContex
     h.click(cx, "add-plugin:counter");
     cx.simulate_prompt_answer("Cancel");
     cx.run_until_parked();
-    assert_eq!(h.item_ids(cx), ["plugin:builtin.weather"]);
+    assert_eq!(h.item_ids(cx), ["plugin:weather"]);
 
     h.click(cx, "add-plugin:counter");
     cx.simulate_prompt_answer("Add Plugin");
     cx.run_until_parked();
-    assert_eq!(h.item_ids(cx), ["plugin:builtin.weather", "plugin:counter"]);
+    assert_eq!(h.item_ids(cx), ["plugin:weather", "plugin:counter"]);
     assert_eq!(
         h.platform
             .saved_configs
@@ -2221,26 +1732,40 @@ fn deleting_a_plugin_trashes_it_and_forgets_its_settings(cx: &mut TestAppContext
 fn a_plugin_that_never_ran_asks_before_joining_the_dock(cx: &mut TestAppContext) {
     let h = open_settings(cx, vec![]);
     h.press(cx, "cmd-4");
-    // Built-ins are trusted.
-    h.click(cx, "plugin-dock:builtin.stats");
-    assert!(!cx.has_pending_prompt());
     h.click(cx, "plugin-dock:counter");
     cx.run_until_parked();
     assert!(cx.has_pending_prompt());
     cx.simulate_prompt_answer("Add Plugin");
     cx.run_until_parked();
-    assert_eq!(h.item_ids(cx), ["plugin:builtin.stats", "plugin:counter"]);
-    // Built-ins can't be deleted; others can be reloaded once in the dock.
-    h.click(cx, "plugin-row:builtin.stats");
+    assert_eq!(h.item_ids(cx), ["plugin:counter"]);
+    // Once in the dock it can be reloaded.
     h.click(cx, "plugin-row:counter");
     let starts = h.platform.plugin_started.borrow().len();
     h.click(cx, "reload-plugin:counter");
     assert_eq!(h.platform.plugin_started.borrow().len(), starts + 1);
+    // Official plugins are plugins like any other: they can be deleted.
+    h.click(cx, "plugin-row:stats");
     cx.update_window(h.window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find("delete-plugin:builtin.stats").is_none());
+        assert!(window.try_find("delete-plugin:stats").is_some());
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn plugins_from_the_gallery_are_marked_official(cx: &mut TestAppContext) {
+    let h = setup(cx, vec![]);
+    cx.update(|cx| {
+        let dock = h.dock.read(cx);
+        let official: Vec<String> = dock
+            .installed_plugins()
+            .into_iter()
+            .filter(|manifest| dock.is_official(manifest))
+            .map(|manifest| manifest.id)
+            .collect();
+        // Counter is local, so it isn't.
+        assert_eq!(official, ["weather", "clipboard", "stats"]);
+    });
 }
 
 #[gpui_kit::test]

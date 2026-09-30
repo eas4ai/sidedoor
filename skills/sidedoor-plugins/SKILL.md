@@ -1,6 +1,6 @@
 ---
 name: sidedoor-plugins
-description: Build, debug, test and share Sidedoor plugins, the TSX widgets that run in the Sidedoor dock via the @sidedoor/sdk package. Use when creating or editing a plugin's index.tsx, a definePlugin call, a dock card, tile, window, action or setting, when using useStorage, createStore, useData or sidedoor.* APIs, when writing bun tests with @sidedoor/sdk/testing, or when a plugin won't load, render or reload.
+description: Build, debug, test and share Sidedoor plugins, the TSX widgets that run in the Sidedoor dock via the @sidedoor/sdk package. Use when creating or editing a plugin's index.tsx, a definePlugin call, a dock card, tile, window, action or setting, when using useStorage, createStore or sidedoor.* APIs, when writing bun tests with @sidedoor/sdk/testing, or when a plugin won't load, render or reload.
 ---
 
 # Sidedoor plugins
@@ -83,7 +83,7 @@ Rules that aren't obvious from React experience:
   `Slider`) `on_commit`. There's no
   `className`, `style` or `onClick`. Numbers are points.
 - **Prefer native components** (`Card`, `Text`, `Button`, `ListRow`,
-  `Meter`, `Chart`, …) so the widget matches the built-ins. Style props on
+  `Meter`, `Chart`, …) so the widget matches the rest of the app. Style props on
   them apply on top.
 - **Colors are palette tokens** that follow light and dark mode: `label`,
   `secondary`, `tertiary`, `separator`, `fill`, `track`, `accent`, `blue`,
@@ -100,8 +100,9 @@ Rules that aren't obvious from React experience:
 - **Windows** (`windows: { key: { title, render } }`, opened with
   `sidedoor.openWindow(key)`) lose component state when closed. Keep what
   matters in storage or a store.
-- **Native data:** declare `data: ["weather" | "stats" | "clipboard"]` and
-  read it with `useData(name)`, which is `null` until the first update.
+- **System data comes from Bun,** not the app: `fetch`, `node:os`,
+  `Bun.spawn` of system tools. The official plugins in `plugins/` (Weather,
+  Stats, Clipboard) show how.
 - **`Input` needs an `id`.** Give list items a `key`.
 - **Seek bars and volume:** use `Slider` (`value` 0–1, `on_change` while
   dragging, `on_commit` on release). Send costly commands from `on_commit`.

@@ -208,37 +208,7 @@ pub(super) fn items_page(
         ),
         palette,
     )];
-    for widget in dock.missing_widgets() {
-        let handler = dock_entity.clone();
-        let detail = match widget {
-            Widget::Weather => "Conditions and the next hours at a glance.",
-            Widget::Clipboard => "Everything you copy, searchable.",
-            Widget::Stats => "CPU, memory and disk use.",
-        };
-        additions.push(row(
-            widget.name(),
-            Some(detail.into()),
-            push_button(
-                SharedString::from(format!("add-widget:{}", widget.name())),
-                "Add",
-                palette,
-                room,
-                false,
-                move |_, cx| {
-                    handler.update(cx, |dock, cx| {
-                        dock.add_widget(widget, cx);
-                    });
-                },
-            ),
-            palette,
-        ));
-    }
-
-    for manifest in dock
-        .available_plugins()
-        .into_iter()
-        .filter(|manifest| !crate::builtins::contains(&manifest.id))
-    {
+    for manifest in dock.available_plugins() {
         let handler = dock_entity.clone();
         let id = SharedString::from(format!("add-plugin:{}", manifest.id));
         additions.push(row(
@@ -262,7 +232,7 @@ pub(super) fn items_page(
             Some("In the Dock"),
             rows,
             Some(
-                "Drag to reorder. A shortcut opens its item from any app; widgets peek out.".into(),
+                "Drag to reorder. A shortcut opens its item from any app; plugins peek out.".into(),
             ),
             palette,
         ),

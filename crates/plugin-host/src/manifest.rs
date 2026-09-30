@@ -1,4 +1,4 @@
-use crate::{install::Source, protocol::DataSource};
+use crate::install::Source;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::{
@@ -23,8 +23,6 @@ pub struct Manifest {
     pub actions: Vec<PluginAction>,
     /// Windows the plugin can open, by key.
     pub windows: Vec<PluginWindow>,
-    /// Native live data explicitly requested by this plugin.
-    pub data: Vec<DataSource>,
     pub dir: PathBuf,
     /// The entry file, relative to `dir`.
     pub main: PathBuf,
@@ -123,8 +121,6 @@ pub struct Described {
     pub actions: Vec<PluginAction>,
     #[serde(default)]
     pub windows: Vec<PluginWindow>,
-    #[serde(default)]
-    pub data: Vec<DataSource>,
 }
 
 fn default_icon() -> String {
@@ -164,7 +160,6 @@ impl Manifest {
             clickable: false,
             actions: Vec::new(),
             windows: Vec::new(),
-            data: Vec::new(),
             source: Source::read(dir),
             dir: dir.to_path_buf(),
             main,
@@ -179,7 +174,6 @@ impl Manifest {
         self.height = described
             .height
             .map(|height| height.clamp(40.0, MAX_HEIGHT));
-        self.data = described.data;
         self.settings = described.settings;
         self.clickable = described.clickable;
         self.actions = described.actions;

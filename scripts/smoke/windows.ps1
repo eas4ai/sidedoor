@@ -9,6 +9,23 @@ New-Item -ItemType Directory -Force $Log | Out-Null
 # Keep CI history and settings isolated from the runner account's normal profile.
 $env:APPDATA = Join-Path $Log "roaming"
 $env:LOCALAPPDATA = Join-Path $Log "local"
+
+# Widgets come from the plugin gallery. Install the official Clipboard and
+# Stats plugins from this checkout, as the gallery would, and put them in
+# the dock.
+$Support = Join-Path $env:APPDATA "Sidedoor"
+$Repo = (Resolve-Path "$PSScriptRoot/../..").Path
+foreach ($Name in @("clipboard", "stats")) {
+    New-Item -ItemType Directory -Force "$Support/plugins/$Name" | Out-Null
+    Get-ChildItem "$Repo/plugins/$Name" -Exclude node_modules |
+        Copy-Item -Destination "$Support/plugins/$Name" -Recurse
+}
+$Config = @{
+    items = @(@{ type = "plugin"; id = "clipboard" }, @{ type = "plugin"; id = "stats" })
+    trusted_plugins = @("clipboard", "stats")
+} | ConvertTo-Json -Depth 4
+# UTF-8 without a byte-order mark, which JSON readers reject.
+[System.IO.File]::WriteAllText("$Support/config.json", $Config)
 Add-Type @'
 using System;
 using System.Collections.Generic;

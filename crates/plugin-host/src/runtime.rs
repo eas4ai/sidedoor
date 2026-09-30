@@ -140,9 +140,7 @@ impl Runner {
         bun: &Path,
         sdk: &Path,
     ) -> io::Result<Connection> {
-        if !domain::builtins::contains(&manifest.id) {
-            prepare(&manifest.dir, sdk)?;
-        }
+        prepare(&manifest.dir, sdk)?;
         let data = platform::support_dir()
             .join("plugin-data")
             .join(&manifest.id);

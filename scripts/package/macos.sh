@@ -34,14 +34,6 @@ cp "target/release/$EXECUTABLE" "$APP/Contents/MacOS/$EXECUTABLE"
 cp "$BUN_BIN" "$APP/Contents/MacOS/bun"
 chmod +x "$APP/Contents/MacOS/bun"
 
-# Built-ins are ordinary plugins, bundled so they require no writable SDK
-# links or dependencies inside the signed app.
-for plugin in weather clipboard stats; do
-    mkdir -p "$APP/Contents/Resources/builtins/$plugin"
-    "$BUN_BIN" build "crates/desktop/src/builtins/$plugin/index.tsx" --target=bun \
-        --outfile "$APP/Contents/Resources/builtins/$plugin/index.js"
-done
-
 # The plugin SDK, which plugins import as `@sidedoor/sdk`.
 mkdir -p "$APP/Contents/Resources/sdk"
 cp -R sdk/package.json sdk/tsconfig.json sdk/README.md sdk/src "$APP/Contents/Resources/sdk/"

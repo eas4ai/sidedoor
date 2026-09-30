@@ -16,7 +16,7 @@ pub fn discover(dir: &Path) -> Vec<Manifest> {
         .filter(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            !name.starts_with('.') && name != "node_modules" && !name.starts_with("builtin.")
+            !name.starts_with('.') && name != "node_modules"
         })
         .filter_map(|entry| Manifest::read(&entry.path()))
         .collect();

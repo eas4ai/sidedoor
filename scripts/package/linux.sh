@@ -35,14 +35,6 @@ cp "target/release/$EXECUTABLE" "$DIR/$EXECUTABLE"
 cp "$BUN_BIN" "$DIR/bun"
 chmod +x "$DIR/$EXECUTABLE" "$DIR/bun"
 
-# Built-ins are ordinary plugins, bundled so they need no SDK links or
-# dependencies inside the installation.
-for plugin in weather clipboard stats; do
-    mkdir -p "$DIR/resources/builtins/$plugin"
-    "$BUN_BIN" build "crates/desktop/src/builtins/$plugin/index.tsx" --target=bun \
-        --outfile "$DIR/resources/builtins/$plugin/index.js"
-done
-
 # The plugin SDK, which plugins import as `@sidedoor/sdk`.
 mkdir -p "$DIR/resources/sdk"
 cp -R sdk/package.json sdk/tsconfig.json sdk/README.md sdk/src "$DIR/resources/sdk/"

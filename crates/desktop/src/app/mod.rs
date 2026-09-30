@@ -1,17 +1,14 @@
 //! Application startup, state, and window coordination.
 pub(crate) mod dock;
 pub(crate) mod host;
-pub(crate) mod plugin_bridge;
 mod shortcuts;
 pub(crate) mod updates;
 mod windows;
 use self::host as platform;
 use crate::ui::{
-    clipboard as clipboard_window, dock as views, plugins::window as plugin_window,
-    settings as settings_window, shortcut_recorder,
+    dock as views, plugins::window as plugin_window, settings as settings_window, shortcut_recorder,
 };
 use ::platform::{hotkeys, native, status_menu};
-use clipboard_window::{ClipboardWindow, ClipboardWindowEvent};
 use dock::{Dock, DockEvent, Services};
 use domain::{geometry, motion};
 use geometry::{CardPlacement, Rect};
@@ -23,7 +20,6 @@ use gpui_kit::{
 use hotkeys::{HotKeys, RegisterError};
 use native::{ForegroundApp, NativeMaterial, NativeWindow};
 use platform::Host;
-use services::weather;
 use settings_window::{SettingsEvent, SettingsWindow};
 use shortcut_recorder::{RecorderEvent, ShortcutRecorder};
 use shortcuts::*;
@@ -50,17 +46,8 @@ fn init(cx: &mut App) -> Result<(), String> {
             )
         })?;
     native::set_appearance(config.appearance);
-    let history = services::storage::load_history(&services::storage::history_path());
-    let dock: Entity<Dock> = cx.new(|cx| {
-        Dock::new(
-            config,
-            platform,
-            screen,
-            history,
-            Services { live: true },
-            cx,
-        )
-    });
+    let dock: Entity<Dock> =
+        cx.new(|cx| Dock::new(config, platform, screen, Services { live: true }, cx));
     dock.update(cx, |dock, cx| dock.start_plugins(cx));
     let chrome = cx.new(|_| CardChrome::default());
 
@@ -103,16 +90,10 @@ fn init(cx: &mut App) -> Result<(), String> {
     });
     register_shortcuts(&dock, &shortcuts, cx);
 
-    let history_window = Rc::new(RefCell::new(HistoryWindow::default()));
     let plugin_windows = PluginWindows::default();
     let opener = dock.clone();
     let registry = shortcuts.clone();
     cx.subscribe(&dock, move |_, event, cx| match event {
-        DockEvent::OpenClipboardHistory => {
-            if let Err(err) = open_clipboard_history(&opener, &history_window, cx) {
-                eprintln!("sidedoor: couldn't open Clipboard History: {err}");
-            }
-        }
         DockEvent::ShortcutsChanged => register_shortcuts(&opener, &registry, cx),
         DockEvent::OpenPluginWindow { plugin, key } => {
             if let Err(err) = open_plugin_window(&opener, &plugin_windows, plugin, key, cx) {

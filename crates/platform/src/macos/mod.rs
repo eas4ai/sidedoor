@@ -5,8 +5,7 @@
 
 use crate::cache_dir;
 use crate::{
-    api::{Accessibility, AppInfo, Copied, LoginItem, Platform},
-    clipboard::ClipKind,
+    api::{Accessibility, AppInfo, LoginItem, Platform},
     config::Appearance,
     geometry::{CardPlacement, PathStep, Point, Rect, Screen},
     motion::{
@@ -24,14 +23,13 @@ use objc2_app_kit::{
     NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationOptions,
     NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBezierPath, NSBitmapImageFileType,
     NSBitmapImageRep, NSDeviceRGBColorSpace, NSEvent, NSGraphicsContext, NSPasteboard,
-    NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
-    NSRunningApplication, NSScreen, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
-    NSWorkspace,
+    NSPasteboardTypeString, NSRunningApplication, NSScreen, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
-    NSBundle, NSData, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString, NSTimeZone,
-    NSURL, NSValue,
+    NSBundle, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString, NSTimeZone, NSURL,
+    NSValue,
 };
 use objc2_quartz_core::{
     CABasicAnimation, CAMediaTiming as _, CAMediaTimingFunction, CAShapeLayer, CATransaction,
@@ -147,20 +145,12 @@ impl Platform for MacPlatform {
             .map_err(|err| std::io::Error::other(err.localizedDescription().to_string()))
     }
 
-    fn pasteboard_change_count(&self) -> isize {
-        clipboard::pasteboard_change_count()
-    }
-
-    fn read_pasteboard(&self, image_dir: &Path) -> Option<Copied> {
-        clipboard::read_pasteboard(image_dir)
-    }
-
     fn notify(&self, source: &str, title: &str, body: &str) {
         crate::notifications::show(source, title, body);
     }
 
-    fn write_pasteboard(&self, kind: &ClipKind) {
-        clipboard::write_pasteboard(kind)
+    fn copy_text(&self, text: &str) {
+        clipboard::copy_text(text)
     }
 
     fn set_appearance(&self, appearance: Appearance) {

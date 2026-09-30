@@ -2,8 +2,7 @@
 
 use super::{message_window::wide, system};
 use crate::{
-    api::{Accessibility, AppInfo, Copied, LoginItem, Platform},
-    clipboard::ClipKind,
+    api::{Accessibility, AppInfo, LoginItem, Platform},
     config::Appearance,
     geometry::{Point, Rect, Screen},
 };
@@ -16,12 +15,9 @@ use std::{
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, POINT},
+    Foundation::{CloseHandle, INVALID_HANDLE_VALUE, POINT},
     Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint},
     System::{
-        DataExchange::{
-            GetClipboardSequenceNumber, IsClipboardFormatAvailable, RegisterClipboardFormatW,
-        },
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
             TH32CS_SNAPPROCESS,
@@ -34,8 +30,8 @@ use windows_sys::Win32::{
         Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
         WindowsAndMessaging::{
-            ANIMATIONINFO, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId,
-            SPI_GETANIMATION, SPI_GETHIGHCONTRAST, SystemParametersInfoW,
+            ANIMATIONINFO, GetCursorPos, SPI_GETANIMATION, SPI_GETHIGHCONTRAST,
+            SystemParametersInfoW,
         },
     },
 };
@@ -72,15 +68,6 @@ pub fn primary_display() -> Option<(MONITORINFO, f64)> {
         let (mut x, mut y) = (96, 96);
         GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y);
         Some((info, f64::from(x) / 96.0))
-    }
-}
-
-fn process_path(hwnd: HWND) -> Option<PathBuf> {
-    // SAFETY: Windows fills a process id for a live HWND; query handle is closed below.
-    unsafe {
-        let mut pid = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        process_path_by_id(pid)
     }
 }
 
@@ -345,96 +332,8 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    fn pasteboard_change_count(&self) -> isize {
-        // SAFETY: no arguments or owned resources.
-        unsafe { GetClipboardSequenceNumber() as isize }
-    }
-
-    fn read_pasteboard(&self, image_dir: &Path) -> Option<Copied> {
-        // Respect the standard Windows history exclusion and password-manager markers.
-        for marker in [
-            "ExcludeClipboardContentFromMonitorProcessing",
-            "Clipboard Viewer Ignore",
-            "org.nspasteboard.ConcealedType",
-        ] {
-            // SAFETY: format name remains valid during registration.
-            let private = unsafe { RegisterClipboardFormatW(wide(marker).as_ptr()) };
-            if private != 0 && unsafe { IsClipboardFormatAvailable(private) } != 0 {
-                return None;
-            }
-        }
-        let history_format =
-            unsafe { RegisterClipboardFormatW(wide("CanIncludeInClipboardHistory").as_ptr()) };
-        if history_format != 0 {
-            let allowed: Vec<u8> =
-                clipboard_win::get_clipboard(clipboard_win::formats::RawData(history_format))
-                    .unwrap_or_default();
-            if allowed.get(..4) == Some(&[0, 0, 0, 0]) {
-                return None;
-            }
-        }
-        let files: Vec<PathBuf> =
-            clipboard_win::get_clipboard(clipboard_win::formats::FileList).unwrap_or_default();
-        let kind = if let Some(path) = files.into_iter().next() {
-            ClipKind::File { path }
-        } else {
-            let mut clipboard = arboard::Clipboard::new().ok()?;
-            if let Some(text) = clipboard.get_text().ok().filter(|text| !text.is_empty()) {
-                ClipKind::from_text(text)
-            } else {
-                let image = clipboard.get_image().ok()?;
-                std::fs::create_dir_all(image_dir).ok()?;
-                let stamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_nanos();
-                let path = image_dir.join(format!("{stamp}.png"));
-                let (width, height) = (
-                    u32::try_from(image.width).ok()?,
-                    u32::try_from(image.height).ok()?,
-                );
-                image::save_buffer(&path, &image.bytes, width, height, image::ColorType::Rgba8)
-                    .ok()?;
-                ClipKind::Image {
-                    path,
-                    width,
-                    height,
-                }
-            }
-        };
-        // SAFETY: retrieve the current foreground window without changing focus.
-        let source = process_path(unsafe { GetForegroundWindow() }).and_then(|path| {
-            path.file_stem()
-                .map(|name| name.to_string_lossy().into_owned())
-        });
-        Some(Copied { kind, source })
-    }
-
-    fn write_pasteboard(&self, kind: &ClipKind) {
-        let result: Result<(), String> = (|| {
-            if let ClipKind::File { path } = kind {
-                let _clipboard =
-                    clipboard_win::Clipboard::new_attempts(3).map_err(|e| e.to_string())?;
-                clipboard_win::empty().map_err(|e| e.to_string())?;
-                return clipboard_win::raw::set_file_list(&[path.to_string_lossy()])
-                    .map_err(|e| e.to_string());
-            }
-            let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-            match kind {
-                ClipKind::Text { text } => clipboard.set_text(text),
-                ClipKind::Link { url } => clipboard.set_text(url),
-                ClipKind::Image { path, .. } => {
-                    let pixels = image::open(path).map_err(|e| e.to_string())?.into_rgba8();
-                    clipboard.set_image(arboard::ImageData {
-                        width: pixels.width() as usize,
-                        height: pixels.height() as usize,
-                        bytes: std::borrow::Cow::Owned(pixels.into_raw()),
-                    })
-                }
-                ClipKind::File { .. } => unreachable!(),
-            }
-            .map_err(|e| e.to_string())
-        })();
+    fn copy_text(&self, text: &str) {
+        let result = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text));
         if let Err(error) = result {
             eprintln!("sidedoor: couldn't write clipboard: {error}");
         }

@@ -2,23 +2,6 @@ use crate::manifest::Described;
 use futures::channel::mpsc::UnboundedReceiver;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-/// Opt-in native feeds shared by built-in and user plugins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DataSource {
-    Weather,
-    Stats,
-    Clipboard,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum ClipboardCommand {
-    ShowHistory,
-    CopyEntry { id: u64 },
-    RequestClear,
-}
-
 // MARK: Protocol
 
 /// A rendered node: text, or an element with props and children.
@@ -85,10 +68,6 @@ pub fn apply_patches(tree: &mut [Node], patches: Vec<Patch>) -> bool {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginMessage {
-    Clipboard {
-        #[serde(flatten)]
-        command: ClipboardCommand,
-    },
     /// Sent first: what `definePlugin` declares.
     Manifest(Described),
     Render {
@@ -134,10 +113,6 @@ pub enum PluginMessage {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostMessage {
-    Data {
-        source: DataSource,
-        value: Value,
-    },
     Event {
         handler: String,
         value: Value,

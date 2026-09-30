@@ -1,27 +1,22 @@
 //! Settings, laid out like a SwiftUI `Settings` scene: a toolbar of tabs
 //! over grouped forms. Every change applies and saves right away.
 
-use crate::app::dock::{Dock, DockItem, ItemKind, WeatherState, Widget};
+use crate::app::dock::{Dock, DockItem, ItemKind};
 use crate::app::host::LoginItem;
 use crate::ui::dock::{self as views, AssignShortcut, OpenConfigFile};
 use crate::ui::theme::{Palette, text};
-use domain::config::{Appearance, MAX_ITEMS, WeatherLocation};
+use domain::config::{Appearance, MAX_ITEMS};
 use domain::geometry::Edge;
 use domain::shortcut::PC_KEYS;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, App, AppContext as _, Context, Div, ElementId,
     Entity, EventEmitter, FocusHandle, FontWeight, Hsla, InteractiveElement as _, IntoElement,
     ObjectFit, ParentElement as _, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription, Task,
-    TestSupportExt as _, Window, WindowControlArea,
-    assets::IconName,
-    component::input::{Input, InputEvent, InputState},
-    div, img, linear_color_stop, linear_gradient,
-    prelude::FluentBuilder as _,
-    px, rgba, svg, transparent_black,
+    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
+    TestSupportExt as _, Window, WindowControlArea, assets::IconName, div, img, linear_color_stop,
+    linear_gradient, prelude::FluentBuilder as _, px, rgba, svg, transparent_black,
 };
-use services::weather::Place;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 /// Key context of the window, so its keys are handled only here.
 pub const CONTEXT: &str = "Settings";
@@ -29,8 +24,6 @@ pub const CONTEXT: &str = "Settings";
 /// caption shows the title elsewhere.
 const TITLE_HEIGHT: f32 = crate::ui::chrome::title_strip(28.0);
 pub const WINDOW_SIZE: (f32, f32) = (620.0, 532.0 + TITLE_HEIGHT);
-/// How long typing pauses before a place search starts.
-const SEARCH_DELAY: Duration = Duration::from_millis(300);
 const PAGE_FADE: Duration = Duration::from_millis(180);
 /// Thumbnails in the edge and theme pickers.
 const THUMB: (f32, f32) = (68.0, 44.0);
@@ -41,17 +34,10 @@ pub enum Tab {
     Dock,
     Items,
     Plugins,
-    Weather,
 }
 
 impl Tab {
-    pub const ALL: [Self; 5] = [
-        Self::General,
-        Self::Dock,
-        Self::Items,
-        Self::Plugins,
-        Self::Weather,
-    ];
+    pub const ALL: [Self; 4] = [Self::General, Self::Dock, Self::Items, Self::Plugins];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -59,7 +45,6 @@ impl Tab {
             Self::Dock => "Dock",
             Self::Items => "Items",
             Self::Plugins => "Plugins",
-            Self::Weather => "Weather",
         }
     }
 
@@ -69,7 +54,6 @@ impl Tab {
             Self::Dock => IconName::PanelRight,
             Self::Items => IconName::LayoutGrid,
             Self::Plugins => IconName::Puzzle,
-            Self::Weather => IconName::CloudSun,
         }
     }
 }
@@ -83,28 +67,9 @@ pub enum SettingsEvent {
     Closed,
 }
 
-/// Looks up places by name; blocking, so it runs in the background. Tests
-/// supply canned results.
-pub type PlaceLookup = Arc<dyn Fn(&str) -> Result<Vec<Place>, String> + Send + Sync>;
-
-enum PlaceSearch {
-    Idle,
-    Searching,
-    Found {
-        query: SharedString,
-        places: Vec<Place>,
-    },
-    Failed(SharedString),
-}
-
 pub struct SettingsWindow {
     dock: Entity<Dock>,
     tab: Tab,
-    city: Entity<InputState>,
-    places: PlaceSearch,
-    lookup: PlaceLookup,
-    /// The pending search; replacing it drops a stale one.
-    search_task: Option<Task<()>>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -112,13 +77,7 @@ pub struct SettingsWindow {
 impl EventEmitter<SettingsEvent> for SettingsWindow {}
 
 impl SettingsWindow {
-    pub fn new(
-        dock: Entity<Dock>,
-        lookup: PlaceLookup,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let city = cx.new(|cx| InputState::new(window, cx).placeholder("Search for a city"));
+    pub fn new(dock: Entity<Dock>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let view = cx.entity().downgrade();
@@ -132,12 +91,6 @@ impl SettingsWindow {
         crate::ui::theme::sync_kit_theme(window, cx);
         dock.update(cx, |dock, cx| dock.refresh_login_item(cx));
         let subscriptions = vec![
-            cx.subscribe_in(&city, window, |this, state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let query = state.read(cx).value();
-                    this.search(query, cx);
-                }
-            }),
             cx.observe(&dock, |_, _, cx| cx.notify()),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -148,7 +101,7 @@ impl SettingsWindow {
                 crate::ui::theme::sync_kit_theme(window, cx);
                 cx.notify();
             }),
-            // The app has no menu bar, so ⌘W and ⌘1–5 are handled here.
+            // The app has no menu bar, so ⌘W and ⌘1–4 are handled here.
             cx.intercept_keystrokes(move |event, window, cx| {
                 if !event
                     .context_stack
@@ -179,7 +132,7 @@ impl SettingsWindow {
                             true
                         }
                         key => match key.parse::<usize>() {
-                            Ok(number @ 1..=5) => {
+                            Ok(number @ 1..=4) => {
                                 this.set_tab(Tab::ALL[number - 1], window, cx);
                                 true
                             }
@@ -195,10 +148,6 @@ impl SettingsWindow {
         Self {
             dock,
             tab: Tab::General,
-            city,
-            places: PlaceSearch::Idle,
-            lookup,
-            search_task: None,
             focus,
             _subscriptions: subscriptions,
         }
@@ -207,11 +156,6 @@ impl SettingsWindow {
     #[cfg(test)]
     pub fn tab(&self) -> Tab {
         self.tab
-    }
-
-    #[cfg(test)]
-    pub fn focus_city(&self, window: &mut Window, cx: &mut App) {
-        self.city.update(cx, |city, cx| city.focus(window, cx));
     }
 
     pub fn set_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
@@ -223,49 +167,6 @@ impl SettingsWindow {
             window.set_window_title(tab.title());
             cx.notify();
         }
-    }
-
-    fn search(&mut self, query: SharedString, cx: &mut Context<Self>) {
-        let query = query.trim().to_string();
-        if query.chars().count() < 2 {
-            self.places = PlaceSearch::Idle;
-            self.search_task = None;
-            cx.notify();
-            return;
-        }
-        self.places = PlaceSearch::Searching;
-        let lookup = self.lookup.clone();
-        self.search_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SEARCH_DELAY).await;
-            let request = query.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { lookup(&request) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.places = match result {
-                    Ok(places) => PlaceSearch::Found {
-                        query: query.into(),
-                        places,
-                    },
-                    Err(message) => PlaceSearch::Failed(message.into()),
-                };
-                cx.notify();
-            })
-            .ok();
-        }));
-        cx.notify();
-    }
-
-    fn choose_place(&mut self, place: &Place, window: &mut Window, cx: &mut Context<Self>) {
-        self.dock
-            .update(cx, |dock, cx| dock.set_location(place.location(), cx));
-        // `set_value` doesn't report a change, so reset the search here.
-        self.city
-            .update(cx, |city, cx| city.set_value("", window, cx));
-        self.places = PlaceSearch::Idle;
-        self.search_task = None;
-        cx.notify();
     }
 
     fn add_apps(&mut self, cx: &mut Context<Self>) {
@@ -302,7 +203,6 @@ impl Render for SettingsWindow {
             Tab::General => general_page(&self.dock, dock, palette, cx),
             Tab::Dock => dock_page(&self.dock, dock, palette),
             Tab::Items => items_page(&view, &self.dock, dock, palette),
-            Tab::Weather => weather_page(&view, &self.city, &self.places, dock, palette),
         };
         let page = div().flex_1().min_h_0().flex().flex_col().child(
             div()
@@ -659,8 +559,6 @@ mod dock;
 mod general;
 mod items;
 pub(crate) mod plugins;
-mod weather;
 use dock::dock_page;
 use general::general_page;
 use items::items_page;
-use weather::weather_page;

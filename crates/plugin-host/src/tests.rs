@@ -194,7 +194,6 @@ fn the_running_plugin_describes_itself() {
         clickable: false,
         actions: Vec::new(),
         windows: Vec::new(),
-        data: Vec::new(),
         dir: PathBuf::from("/plugins/pomodoro"),
         main: PathBuf::from("index.tsx"),
         source: None,
